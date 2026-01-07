@@ -45,19 +45,36 @@ def process_video_in_background(file_path, video_name):
             pass
         collection = client.create_collection(name=collection_name, embedding_function=ef)
         result = model.transcribe(file_path)
+        segments = result['segments']
+
+        # Group size: How many Whisper segments to combine into one "Chunk"
+        GROUP_SIZE = 3
+
         ids = []
         documents = []
         metadatas = []
-        for i, segment in enumerate(result['segments']):
-            text = segment['text'].strip()
+
+        for i in range(0, len(segments), GROUP_SIZE):
+            # Take a slice of 3 segments
+            group = segments[i: i + GROUP_SIZE]
+
+            # Combine the text
+            combined_text = " ".join([s['text'].strip() for s in group])
+
+            # Start time is the start of the FIRST segment
+            start_time = group[0]['start']
+            # End time is the end of the LAST segment
+            end_time = group[-1]['end']
+
             ids.append(f"{collection_name}_{i}")
-            documents.append(text)
+            documents.append(combined_text)
             metadatas.append({
-                "start_time": segment['start'],
-                "end_time": segment['end'],
+                "start_time": start_time,
+                "end_time": end_time,
                 "video_name": video_name,
                 "source_collection": collection_name
             })
+
         collection.add(ids=ids, documents=documents, metadatas=metadatas)
         print(f"Finished processing {video_name}")
     except Exception as e:
