@@ -1,0 +1,7 @@
+streamlit
+openai-whisper
+chromadb
+sentence-transformers
+google-generativeai
+torch
+watchdog
