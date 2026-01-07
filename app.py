@@ -25,7 +25,7 @@ if 'selected_video' not in st.session_state:
 def main_app():
     # === SIDEBAR NAVIGATION ===
     with st.sidebar:
-        st.title(f"👤 {st.session_state['username']}")
+        st.title(f"Hello {st.session_state['username']}👤")
         st.markdown("---")
 
         menu_selection = st.radio(
