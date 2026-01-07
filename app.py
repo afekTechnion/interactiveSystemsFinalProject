@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import glob  # ספרייה למציאת קבצים
 import auth
 import video_processor
 import query_engine
@@ -7,7 +8,31 @@ import query_engine
 # --- Setup ---
 st.set_page_config(layout="wide", page_title="Video AI System")
 
+
+# --- Cleanup Logic (New) ---
+# מנקה קבצי נעילה ישנים כשהאפליקציה עולה מחדש
+def cleanup_stuck_locks():
+    # מוחק רק אם האפליקציה רק עלתה (בפעם הראשונה)
+    if 'cleanup_done' not in st.session_state:
+        lock_files = glob.glob(os.path.join(video_processor.PROCESSING_FOLDER, "*.lock"))
+        for f in lock_files:
+            try:
+                os.remove(f)
+                print(f"Cleaned up stuck lock: {f}")
+            except:
+                pass
+        st.session_state['cleanup_done'] = True
+
+
+cleanup_stuck_locks()
+
 # Initialize Databases
+if 'gemini_api_key' not in st.session_state:
+    if "GEMINI_API_KEY" in st.secrets:
+        st.session_state['gemini_api_key'] = st.secrets["GEMINI_API_KEY"]
+    else:
+        st.session_state['gemini_api_key'] = ""
+
 auth.init_user_db()
 
 # --- Session Management ---
@@ -17,14 +42,14 @@ if 'current_page' not in st.session_state:
     st.session_state['current_page'] = "Chat Workspace"
 if 'selected_video' not in st.session_state:
     st.session_state['selected_video'] = None
-if 'gemini_api_key' not in st.session_state:
-    st.session_state['gemini_api_key'] = ""
 
 
 def main_app():
+    username = st.session_state['username']
+
     # === SIDEBAR ===
     with st.sidebar:
-        st.title(f"👤 {st.session_state['username']}")
+        st.title(f"👤 {username}")
 
         # Navigation
         menu_selection = st.radio(
@@ -40,29 +65,41 @@ def main_app():
 
         st.markdown("---")
 
-        # API Key Input
-        with st.expander("⚙️ AI Settings", expanded=False):
-            st.caption("Required for RAG Answer Generation")
-            api_key_input = st.text_input("Gemini API Key", type="password", value=st.session_state['gemini_api_key'])
-            if api_key_input:
-                st.session_state['gemini_api_key'] = api_key_input
+        if not st.session_state['gemini_api_key']:
+            with st.expander("⚙️ AI Settings", expanded=False):
+                st.caption("Required for RAG Answer Generation")
+                api_key_input = st.text_input("Gemini API Key", type="password")
+                if api_key_input:
+                    st.session_state['gemini_api_key'] = api_key_input
 
         st.markdown("---")
         if st.button("Logout", icon="🚪"):
             st.session_state['logged_in'] = False
             st.rerun()
 
+        # === STATUS INDICATOR (Updated) ===
+        st.markdown("---")
+        processing_count = video_processor.get_processing_videos(username)
+        if processing_count > 0:
+            # שינינו ל-Status פשוט בלי הבר המבלבל
+            with st.status("🔄 Processing Video...", expanded=True):
+                st.write("Transcribing audio & building AI index.")
+                st.caption("This runs in the background.")
+                # הוספנו כפתור לרענון ידני כדי שהמשתמש יראה מתי זה נגמר
+                if st.button("Check Status"):
+                    st.rerun()
+
     # === PAGE ROUTING ===
+
     if st.session_state['current_page'] == "Upload Center":
-        video_processor.render_upload_page()
+        video_processor.render_upload_page(username)
 
     elif st.session_state['current_page'] == "Video Library":
-        video_processor.render_library_page()
+        video_processor.render_library_page(username)
 
-    # === RAG CHAT WORKSPACE ===
     elif st.session_state['current_page'] == "Chat Workspace":
 
-        # Scenario A: Global Search (The RAG Part)
+        # --- SCENARIO A: Global Search (RAG) ---
         if st.session_state['selected_video'] is None:
             st.header("🧠 Knowledge Query")
 
@@ -75,11 +112,9 @@ def main_app():
                 st.session_state['previous_query'] = user_query
 
                 with st.spinner("Analyzing videos & Generating answer..."):
-                    # 1. Retrieve & Rerank (Get the Sources)
-                    matches = query_engine.search_all_collections(user_query)
+                    matches = query_engine.search_all_collections(user_query, username)
                     st.session_state['global_matches'] = matches
 
-                    # 2. Generation (Ask Gemini)
                     if matches:
                         ai_response = query_engine.ask_gemini(
                             user_query,
@@ -90,21 +125,16 @@ def main_app():
                     else:
                         st.session_state['ai_answer'] = "No relevant videos found to answer this question."
 
-            # Display Results
             if user_query:
-                # 1. The AI Answer
                 st.subheader("🤖 AI Answer")
                 if 'ai_answer' in st.session_state:
-                    # הוספתי כאן color: black; כדי שהטקסט יהיה קריא
                     st.markdown(f"""
-                                    <div style="background-color: #f0f2f6; color: black; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4b4b;">
-                                        {st.session_state['ai_answer']}
-                                    </div>
-                                    """, unsafe_allow_html=True)
+                    <div style="background-color: #f0f2f6; color: black; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4b4b;">
+                        {st.session_state['ai_answer']}
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 st.divider()
-
-                # 2. The Source Videos (Citations)
                 st.subheader("📚 Source Videos")
                 matches = st.session_state.get('global_matches', [])
 
@@ -116,7 +146,7 @@ def main_app():
                         col_info, col_action = st.columns([4, 1])
                         with col_info:
                             st.markdown(f"**🎬 Source:** `{match['video_name']}`")
-                            st.caption(f"Relevant Excerpt: \"{match['reason'][:200]}...\"")
+                            st.caption(f"Relevant Excerpt: \"{match['text'][:200]}...\"")
                         with col_action:
                             st.write("")
                             if st.button("Watch", key=f"select_{idx}", type="primary", use_container_width=True):
@@ -124,7 +154,7 @@ def main_app():
                                 st.session_state['start_time'] = match['start_time']
                                 st.rerun()
 
-        # Scenario B: Watching a specific video
+        # --- SCENARIO B: Watching Specific Video ---
         else:
             col_back, col_title = st.columns([1, 5])
             with col_back:
@@ -137,7 +167,9 @@ def main_app():
             st.divider()
 
             selected_vid = st.session_state['selected_video']
-            video_path = os.path.join(video_processor.VIDEOS_DIR, selected_vid)
+
+            videos_dir, _ = video_processor.get_user_paths(username)
+            video_path = os.path.join(videos_dir, selected_vid)
 
             col_player, col_chat = st.columns([1.5, 1])
             with col_player:
@@ -145,7 +177,7 @@ def main_app():
                 start_ts = st.session_state.get('start_time', 0)
                 video_player.video(video_path, start_time=int(start_ts))
             with col_chat:
-                query_engine.render_search_ui(selected_vid, video_path, video_player)
+                query_engine.render_search_ui(selected_vid, video_path, video_player, username)
 
 
 if st.session_state['logged_in']:

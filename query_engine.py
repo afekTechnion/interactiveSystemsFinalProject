@@ -6,52 +6,51 @@ import google.generativeai as genai
 # --- CONFIGURATION ---
 INITIAL_TOP_K = 10
 FINAL_TOP_K = 3
+CONFIDENCE_THRESHOLD = 0.45
 
 
 @st.cache_resource
 def load_reranker():
-    # Loads the Cross-Encoder model to judge relevance
     return CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
 
 def expand_context(collection, center_id, window=1):
-    """
-    Given a segment ID (e.g., 'Video_50'), fetches neighbors (49, 51)
-    to create a larger context window.
-    """
     try:
-        # 1. Parse the ID to find the index (assuming format "CollectionName_Index")
         base_name, index_str = center_id.rsplit('_', 1)
         current_idx = int(index_str)
 
-        # 2. Calculate neighbor IDs
         ids_to_fetch = []
         for i in range(current_idx - window, current_idx + window + 1):
-            if i >= 0:  # Avoid negative indices
+            if i >= 0:
                 ids_to_fetch.append(f"{base_name}_{i}")
 
-        # 3. Fetch data from DB
         data = collection.get(ids=ids_to_fetch)
-
-        # 4. Sort and Join
-        # We must sort because DB returns them in random order
         sorted_docs = sorted(zip(data['ids'], data['documents']), key=lambda x: int(x[0].rsplit('_', 1)[1]))
         full_text = " ".join([doc for _, doc in sorted_docs])
-
         return full_text
     except Exception:
-        return ""  # Fallback if something fails
+        return ""
 
 
-def search_all_collections(query_text):
-    """
-    Retrieves and Reranks results to find the best context.
-    """
-    client = video_processor.get_db_client()
-    videos = video_processor.get_videos_list()
+def search_single_video(collection_name, query_text, username, n_results=5):
+    """מחפש בתוך וידאו ספציפי של משתמש ספציפי"""
+    _, chroma_dir = video_processor.get_user_paths(username)
+    client = video_processor.get_db_client(chroma_dir)
+    try:
+        collection = client.get_collection(collection_name)
+        results = collection.query(query_texts=[query_text], n_results=n_results)
+        return results
+    except ValueError:
+        return None
+
+
+def search_all_collections(query_text, username):
+    videos_dir, chroma_dir = video_processor.get_user_paths(username)
+    client = video_processor.get_db_client(chroma_path=chroma_dir)
+    videos = video_processor.get_videos_list(username)
+
     reranker = load_reranker()
 
-    # 1. Broad Search (Retrieval)
     initial_candidates = []
     for video_name in videos:
         col_name = "".join([c if c.isalnum() else "_" for c in video_name])
@@ -60,7 +59,7 @@ def search_all_collections(query_text):
             results = collection.query(query_texts=[query_text], n_results=2)
             if results['documents']:
                 for i in range(len(results['documents'][0])):
-                    doc_id = results['ids'][0][i]  # Get the ID (e.g., "MyVideo_15")
+                    doc_id = results['ids'][0][i]
                     expanded_text = expand_context(collection, doc_id, window=1)
                     meta = results['metadatas'][0][i]
                     initial_candidates.append({
@@ -74,7 +73,6 @@ def search_all_collections(query_text):
     if not initial_candidates:
         return []
 
-    # 2. Smart Filtering (Reranking)
     rerank_pairs = [[query_text, candidate['text']] for candidate in initial_candidates]
     scores = reranker.predict(rerank_pairs)
 
@@ -87,20 +85,13 @@ def search_all_collections(query_text):
 
 
 def ask_gemini(query, context_results, api_key):
-    """
-    The 'G' in RAG: Sends the context + question to Gemini.
-    """
     if not api_key:
         return "Please enter your Google API Key in the sidebar to generate an answer."
 
-    # Configure the API with the user's key
     genai.configure(api_key=api_key)
 
-    # Use Gemini Pro (optimized for text)
     model = genai.GenerativeModel('gemini-2.5-flash')
 
-    # Construct the Prompt
-    # We feed the retrieved video snippets as "Context"
     context_text = ""
     for item in context_results:
         context_text += f"- From video '{item['video_name']}': {item['text']}\n"
@@ -125,14 +116,35 @@ def ask_gemini(query, context_results, api_key):
         return f"Error connecting to Gemini: {e}"
 
 
-# ... (Include the render_search_ui function from previous steps here if needed) ...
-def render_search_ui(selected_video_name, video_path, video_player_placeholder):
-    # Same as previous version
+def render_search_ui(selected_video_name, video_path, video_player_placeholder, username):
+    """UI לחיפוש בתוך וידאו ספציפי"""
     st.subheader("Deep Search in Video")
     query = st.text_input("Find specific moment in this video...", key="local_search")
 
     if query and selected_video_name:
         col_name = "".join([c if c.isalnum() else "_" for c in selected_video_name])
-        # Note: You need the search_single_video function here too (omitted for brevity)
-        # You can copy it from the previous response
-        pass
+
+        # כעת אנו מעבירים גם את שם המשתמש
+        results = search_single_video(col_name, query, username)
+
+        if results and results['documents']:
+            found_any = False
+            for i in range(len(results['documents'][0])):
+                score = results['distances'][0][i]
+
+                # סינון תוצאות לא רלוונטיות
+                if score > CONFIDENCE_THRESHOLD:
+                    continue
+
+                found_any = True
+                doc_text = results['documents'][0][i]
+                start_time = results['metadatas'][0][i]['start_time']
+                time_str = f"{int(start_time // 60):02d}:{int(start_time % 60):02d}"
+
+                with st.expander(f"{time_str} - {doc_text[:50]}..."):
+                    st.write(f"\"{doc_text}\"")
+                    if st.button(f"Jump to {time_str}", key=f"jump_{i}"):
+                        video_player_placeholder.video(video_path, start_time=int(start_time))
+
+            if not found_any:
+                st.warning("No relevant matches found in this video.")
