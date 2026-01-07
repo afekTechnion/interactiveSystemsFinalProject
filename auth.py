@@ -60,28 +60,58 @@ def login_user(username, password):
 
 
 def render_login_ui():
-    st.title("Login System")
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+    # 1. Custom CSS to clean up the top padding and center things nicely
+    st.markdown("""
+        <style>
+            .block-container {
+                padding-top: 3rem;
+                padding-bottom: 2rem;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 
-    with tab1:
-        st.subheader("Login Section")
-        username = st.text_input("User Name")
-        password = st.text_input("Password", type='password')
-        if st.button("Login"):
-            if login_user(username, password):
-                st.session_state['logged_in'] = True
-                st.session_state['username'] = username
-                st.success(f"Logged In as {username}")
-                st.rerun()
-            else:
-                st.error("Incorrect Username or Password")
+    # 2. Use columns to center the content (Left Spacer | Content | Right Spacer)
+    col1, col2, col3 = st.columns([1, 1.5, 1])
 
-    with tab2:
-        st.subheader("Create New Account")
-        new_user = st.text_input("New Username")
-        new_password = st.text_input("New Password", type='password')
-        if st.button("Sign Up"):
-            if add_user(new_user, new_password):
-                st.success("Account created! Please Login.")
-            else:
-                st.warning("Username already exists")
+    with col2:
+        # Header with centered text and emoji
+        st.markdown("<h1 style='text-align: center;'>🎬 PinPoint</h1>", unsafe_allow_html=True)
+        st.markdown(
+            "<p style='text-align: center; color: grey; margin-bottom: 30px;'>Sign in to access your knowledge base</p>",
+            unsafe_allow_html=True)
+
+        # 3. Use a Container with a border to create a "Card" look
+        with st.container(border=True):
+            # Add icons to tabs for better visuals
+            tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
+
+            # --- Login Tab ---
+            with tab1:
+                st.write("")  # Add a little breathing room
+                username = st.text_input("Username", key="login_user")
+                password = st.text_input("Password", type='password', key="login_pass")
+
+                st.write("")
+                # use_container_width=True makes the button stretch to match inputs
+                # type="primary" makes it red/bold (the theme color)
+                if st.button("Log In", use_container_width=True, type="primary"):
+                    if login_user(username, password):
+                        st.session_state['logged_in'] = True
+                        st.session_state['username'] = username
+                        st.toast(f"Welcome back, {username}!")  # Nice popup effect
+                        st.rerun()
+                    else:
+                        st.error("Incorrect Username or Password")
+
+            # --- Sign Up Tab ---
+            with tab2:
+                st.write("")
+                new_user = st.text_input("Choose a Username", key="signup_user")
+                new_password = st.text_input("Choose a Password", type='password', key="signup_pass")
+
+                st.write("")
+                if st.button("Create Account", use_container_width=True):
+                    if add_user(new_user, new_password):
+                        st.success("Account created! Please switch to Login tab.")
+                    else:
+                        st.warning("That username is taken.")

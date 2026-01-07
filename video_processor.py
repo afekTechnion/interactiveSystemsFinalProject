@@ -6,19 +6,18 @@ import chromadb
 from chromadb.utils import embedding_functions
 import torch
 
-# Configuration
+# --- Configuration ---
 BASE_DB_FOLDER = "Database"
 VIDEOS_DIR = os.path.join(BASE_DB_FOLDER, "videos_db")
 CHROMA_DB_DIR = os.path.join(BASE_DB_FOLDER, "transcription_db")
 
-# Ensure directories exist
 os.makedirs(VIDEOS_DIR, exist_ok=True)
 os.makedirs(CHROMA_DB_DIR, exist_ok=True)
 
-# Device configuration
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+# --- Backend Logic ---
 @st.cache_resource
 def load_whisper():
     return whisper.load_model("small", device=device)
@@ -30,34 +29,25 @@ def get_db_client():
 
 
 def get_embedding_function():
-    # Using the specific model from your code
     return embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
 
 
 def process_video_in_background(file_path, video_name):
+    # (הקוד כאן נשאר זהה למה שהיה לך מקודם - ללא שינוי)
     try:
         model = load_whisper()
         client = get_db_client()
         ef = get_embedding_function()
-
-        # Create valid collection name
         collection_name = "".join([c if c.isalnum() else "_" for c in video_name])
-
-        # Reset collection if exists to avoid duplicates
         try:
             client.delete_collection(collection_name)
         except:
             pass
-
         collection = client.create_collection(name=collection_name, embedding_function=ef)
-
-        # Transcribe
         result = model.transcribe(file_path)
-
         ids = []
         documents = []
         metadatas = []
-
         for i, segment in enumerate(result['segments']):
             text = segment['text'].strip()
             ids.append(f"{collection_name}_{i}")
@@ -68,48 +58,72 @@ def process_video_in_background(file_path, video_name):
                 "video_name": video_name,
                 "source_collection": collection_name
             })
-
         collection.add(ids=ids, documents=documents, metadatas=metadatas)
         print(f"Finished processing {video_name}")
-
     except Exception as e:
         print(f"Error processing video: {e}")
 
 
-def render_sidebar_ui():
-    """Renders the upload and library sidebar."""
-    st.sidebar.header("Library & Upload")
+# --- UI Functions (החלק החדש) ---
 
-    # Initialize session state for videos if not present
-    if 'processed_videos' not in st.session_state:
-        st.session_state['processed_videos'] = os.listdir(VIDEOS_DIR)
+def get_videos_list():
+    """Returns a list of video filenames."""
+    if not os.path.exists(VIDEOS_DIR):
+        return []
+    return [f for f in os.listdir(VIDEOS_DIR) if f.endswith(('.mp4', '.mov', '.avi'))]
 
-    uploaded_file = st.sidebar.file_uploader("Upload New Video", type=["mp4", "mov"])
 
-    if uploaded_file:
-        file_path = os.path.join(VIDEOS_DIR, uploaded_file.name)
+def render_upload_page():
+    """מציג את מסך ההעלאה בלבד"""
+    st.header("☁️ Upload Center")
+    st.write("Upload new videos to your knowledge base.")
 
-        # Avoid re-uploading/processing if exists
-        if not os.path.exists(file_path):
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            st.toast(f"Saved {uploaded_file.name}")
+    # אזור גרירה מעוצב
+    with st.container(border=True):
+        uploaded_file = st.file_uploader("Drag and drop video here", type=["mp4", "mov", "avi"])
 
-            # Start Background Thread
-            thread = threading.Thread(target=process_video_in_background, args=(file_path, uploaded_file.name))
-            thread.start()
-            st.sidebar.info("Processing started in background...")
+        if uploaded_file:
+            file_path = os.path.join(VIDEOS_DIR, uploaded_file.name)
 
-            # Update list
-            st.session_state['processed_videos'].append(uploaded_file.name)
+            # כפתור שמפעיל את התהליך
+            if st.button("Start Processing", type="primary"):
+                if not os.path.exists(file_path):
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
 
-    st.sidebar.divider()
-    st.sidebar.subheader("Your Videos")
+                    st.success(f"File saved: {uploaded_file.name}")
 
-    video_list = st.session_state['processed_videos']
-    if video_list:
-        selected = st.sidebar.radio("Select video:", video_list)
-        return selected
-    else:
-        st.sidebar.info("No videos yet.")
-        return None
+                    # הרצת תהליך ברקע
+                    thread = threading.Thread(target=process_video_in_background, args=(file_path, uploaded_file.name))
+                    thread.start()
+                    st.info("Processing started in background! You can go to the Library now.")
+                else:
+                    st.warning("File already exists.")
+
+
+def render_library_page():
+    """מציג את כל הסרטונים כרשימה/גריד"""
+    st.header("📚 Video Library")
+
+    videos = get_videos_list()
+
+    if not videos:
+        st.info("No videos found. Go to 'Upload' to add some!")
+        return
+
+    # חיפוש בתוך הספרייה (פילטר פשוט)
+    search = st.text_input("Filter library...", "")
+    filtered_videos = [v for v in videos if search.lower() in v.lower()]
+
+    # הצגת הסרטונים
+    for vid in filtered_videos:
+        with st.container(border=True):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.subheader(f"🎬 {vid}")
+            with col2:
+                # כפתור שמעביר למסך העבודה (Chat)
+                if st.button("Open Workspace", key=f"btn_{vid}"):
+                    st.session_state['selected_video'] = vid
+                    st.session_state['current_page'] = "Chat Workspace"  # ניווט אוטומטי
+                    st.rerun()
