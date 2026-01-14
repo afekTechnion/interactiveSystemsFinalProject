@@ -79,15 +79,29 @@ def main_app():
 
         # === STATUS INDICATOR (Updated) ===
         st.markdown("---")
-        processing_count = video_processor.get_processing_videos(username)
-        if processing_count > 0:
-            # שינינו ל-Status פשוט בלי הבר המבלבל
-            with st.status("🔄 Processing Video...", expanded=True):
-                st.write("Transcribing audio & building AI index.")
-                st.caption("This runs in the background.")
-                # הוספנו כפתור לרענון ידני כדי שהמשתמש יראה מתי זה נגמר
-                if st.button("Check Status"):
-                    st.rerun()
+
+        # 1. Fetch active jobs from the new function
+        active_jobs = video_processor.get_active_progress(username)
+
+        if active_jobs:
+            st.subheader("🔄 Processing Queue")
+
+            for job in active_jobs:
+                # Display Video Name
+                st.caption(f"**{job['video']}**")
+
+                # Display Progress Bar (Streamlit takes a float 0.0 to 1.0)
+                progress_val = job['progress'] / 100
+                st.progress(progress_val)
+
+                # Display Stage Text (e.g., "Transcribing...")
+                st.caption(f"*{job['stage']}*")
+
+            st.divider()
+
+            # The button to manually refresh the view
+            if st.button("Refresh Progress", icon="🔄"):
+                st.rerun()
 
     # === PAGE ROUTING ===
 
