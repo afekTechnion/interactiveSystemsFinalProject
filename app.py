@@ -177,7 +177,14 @@ def main_app():
                 start_ts = st.session_state.get('start_time', 0)
                 video_player.video(video_path, start_time=int(start_ts))
             with col_chat:
-                query_engine.render_search_ui(selected_vid, video_path, video_player, username)
+                # NEW LINE (Passes the key from secrets)
+                query_engine.render_search_ui(
+                    selected_vid,
+                    video_path,
+                    video_player,
+                    username,
+                    st.session_state['gemini_api_key']  # <--- This reads from secrets.toml
+                )
 
 
 if st.session_state['logged_in']:

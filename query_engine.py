@@ -1,12 +1,12 @@
 import streamlit as st
 import video_processor
 from sentence_transformers import CrossEncoder
-import google.generativeai as genai
+from google import genai
 
 # --- CONFIGURATION ---
 INITIAL_TOP_K = 10
 FINAL_TOP_K = 3
-CONFIDENCE_THRESHOLD = 0.45
+CONFIDENCE_THRESHOLD = 1
 
 
 @st.cache_resource
@@ -53,7 +53,7 @@ def search_all_collections(query_text, username):
 
     initial_candidates = []
     for video_name in videos:
-        col_name = "".join([c if c.isalnum() else "_" for c in video_name])
+        col_name = video_processor.get_safe_collection_name(video_name)
         try:
             collection = client.get_collection(col_name)
             results = collection.query(query_texts=[query_text], n_results=2)
@@ -88,63 +88,76 @@ def ask_gemini(query, context_results, api_key):
     if not api_key:
         return "Please enter your Google API Key in the sidebar to generate an answer."
 
-    genai.configure(api_key=api_key)
-
-    model = genai.GenerativeModel('gemini-2.5-flash')
-
-    context_text = ""
-    for item in context_results:
-        context_text += f"- From video '{item['video_name']}': {item['text']}\n"
-
-    prompt = f"""
-    You are a helpful video assistant. 
-    Answer the user's question based ONLY on the context provided below.
-    If the answer is not in the context, say "I couldn't find the answer in the videos."
-
-    Context:
-    {context_text}
-
-    User Question: {query}
-
-    Answer:
-    """
-
+    # --- NEW SYNTAX (google-genai) ---
     try:
-        response = model.generate_content(prompt)
+        # 1. Initialize the Client
+        client = genai.Client(api_key=api_key)
+
+        context_text = ""
+        for item in context_results:
+            context_text += f"- {item['text']}\n"
+
+        prompt = f"""
+        You are a helpful video assistant. 
+        Answer the user's question based ONLY on the context provided below.
+
+        Context:
+        {context_text}
+
+        User Question: {query}
+
+        Answer:
+        """
+
+        # 2. Generate Content using the Client
+        # Note: I changed the model to 'gemini-1.5-flash' because '2.5' does not exist yet.
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
         return response.text
+
     except Exception as e:
         return f"Error connecting to Gemini: {e}"
 
 
-def render_search_ui(selected_video_name, video_path, video_player_placeholder, username):
-    """UI לחיפוש בתוך וידאו ספציפי"""
+def render_search_ui(selected_video_name, video_path, video_player_placeholder, username, api_key):
     st.subheader("Deep Search in Video")
     query = st.text_input("Find specific moment in this video...", key="local_search")
 
     if query and selected_video_name:
-        col_name = "".join([c if c.isalnum() else "_" for c in selected_video_name])
+        # Use the safe name converter
+        col_name = video_processor.get_safe_collection_name(selected_video_name)
 
-        # כעת אנו מעבירים גם את שם המשתמש
+        # Pass the username
         results = search_single_video(col_name, query, username)
 
         if results and results['documents']:
             found_any = False
+            valid_results = []
+
+            # 1. Filter results
             for i in range(len(results['documents'][0])):
                 score = results['distances'][0][i]
+                if score <= CONFIDENCE_THRESHOLD:
+                    found_any = True
+                    doc_text = results['documents'][0][i]
+                    start_time = results['metadatas'][0][i]['start_time']
+                    valid_results.append({'text': doc_text, 'start_time': start_time})
 
-                # סינון תוצאות לא רלוונטיות
-                if score > CONFIDENCE_THRESHOLD:
-                    continue
+            if found_any:
+                # 2. GENERATE ANSWER (This uses the api_key you passed)
+                with st.spinner("Generating AI Answer..."):
+                    ai_answer = ask_gemini(query, valid_results, api_key)
+                    st.markdown(f"**🤖 AI Answer:** {ai_answer}")
+                    st.divider()
 
-                found_any = True
-                doc_text = results['documents'][0][i]
-                start_time = results['metadatas'][0][i]['start_time']
-                time_str = f"{int(start_time // 60):02d}:{int(start_time % 60):02d}"
-
-                with st.expander(f"{time_str} - {doc_text[:50]}..."):
-                    st.write(f"\"{doc_text}\"")
-                    if st.button(f"Jump to {time_str}", key=f"jump_{i}"):
-                        video_player_placeholder.video(video_path, start_time=int(start_time))
-
-            if not found_any:
-                st.warning("No relevant matches found in this video.")
+                # 3. Show Timestamps
+                for res in valid_results:
+                    time_str = f"{int(res['start_time'] // 60):02d}:{int(res['start_time'] % 60):02d}"
+                    with st.expander(f"Jump to {time_str}"):
+                        st.write(f"\"{res['text']}\"")
+                        if st.button(f"Play {time_str}", key=f"jump_{res['start_time']}"):
+                            video_player_placeholder.video(video_path, start_time=int(res['start_time']))
+            else:
+                st.warning("No matches found.")

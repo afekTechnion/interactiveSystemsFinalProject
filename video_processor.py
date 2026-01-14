@@ -169,8 +169,14 @@ def render_upload_page(username):
                 if get_processing_videos(username) > 0:
                     st.warning("Wait for the current video to finish!")
                 elif not os.path.exists(file_path):
+                    # Upload in small 5MB chunks to prevent RAM overuse
                     with open(file_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
+                        while True:
+                            # Read the file in 5MB chunks (5 * 1024 * 1024 bytes)
+                            chunk = uploaded_file.read(5 * 1024 * 1024)
+                            if not chunk:
+                                break
+                            f.write(chunk)
 
                     st.success(f"File saved to {username}'s library")
 
