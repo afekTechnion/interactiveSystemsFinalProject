@@ -179,10 +179,22 @@ def get_videos_list(username):
     return [f for f in os.listdir(videos_dir) if f.endswith(('.mp4', '.mov', '.avi'))]
 
 
-# === 🎨 NEW DESIGN: Upload Page ===
+# === 🎨 NEW DESIGN: Upload Page with Progress ===
 def render_upload_page(username):
     st.title("📥 Import Content")
-    st.markdown("Add new videos to your personal knowledge base.")
+
+    # --- PROGESS SECTION START ---
+    active_jobs = get_active_progress(username)
+    if active_jobs:
+        st.info("🔄 Processing in background...")
+        for job in active_jobs:
+            st.write(f"**{job['video']}**: {job['stage']}")
+            st.progress(job['progress'])
+
+        # This causes the page to refresh, animating the bar
+        time.sleep(1)
+        st.rerun()
+    # --- PROGRESS SECTION END ---
 
     videos_dir, chroma_dir, _ = get_user_paths(username)
 
