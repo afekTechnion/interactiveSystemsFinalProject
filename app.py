@@ -20,9 +20,6 @@ def load_css():
                 background: linear-gradient(to right, #FF4B4B, #FF6B6B);
                 color: white; border: none; border-radius: 8px; font-weight: bold;
             }
-            div.stButton > button:first-child:hover {
-                transform: translateY(-2px); box-shadow: 0 4px 10px rgba(255, 75, 75, 0.4);
-            }
             .stTextInput > div > div > input {
                 background-color: #21262D; color: white; border-radius: 8px; border: 1px solid #30363D;
             }
@@ -39,7 +36,7 @@ if 'models_loaded' not in st.session_state:
         st.session_state['models_loaded'] = True
 
 
-# --- Cleanup Logic ---
+# --- Cleanup ---
 def cleanup_stuck_locks():
     if 'cleanup_done' not in st.session_state:
         lock_files = glob.glob(os.path.join(video_processor.PROCESSING_FOLDER, "*.lock"))
@@ -83,16 +80,13 @@ def main_app():
 
         st.caption(f"Logged in as: {username}")
 
-        # === NAVIGATION ===
+        # Navigation
         nav_options = ["✨ AI Chat", "🎬 My Studio", "📥 Import"]
-
-        # Fallback if state has old name
         if st.session_state['current_page'] not in nav_options:
             st.session_state['current_page'] = "✨ AI Chat"
 
         selected_option = st.radio(
-            "Menu",
-            nav_options,
+            "Menu", nav_options,
             index=nav_options.index(st.session_state['current_page']),
             label_visibility="collapsed"
         )
@@ -105,13 +99,11 @@ def main_app():
 
         st.divider()
 
-        # Settings
         if not st.session_state['gemini_api_key']:
             with st.expander("🔑 API Key", expanded=True):
                 api_input = st.text_input("Enter Key", type="password")
                 if api_input: st.session_state['gemini_api_key'] = api_input
 
-        # Processing Widget
         active_jobs = video_processor.get_active_progress(username)
         if active_jobs:
             st.info(f"⚡ Processing {len(active_jobs)} item(s)")
@@ -121,7 +113,7 @@ def main_app():
             st.session_state['logged_in'] = False
             st.rerun()
 
-    # === PAGE ROUTING ===
+    # === ROUTING ===
     if st.session_state['current_page'] == "📥 Import":
         video_processor.render_upload_page(username)
 
@@ -130,56 +122,72 @@ def main_app():
 
     elif st.session_state['current_page'] == "✨ AI Chat":
 
-        # --- SCENARIO A: Global Search (No Video Selected) ---
+        # --- SCENARIO A: Global Search (Chat History Enabled) ---
         if st.session_state['selected_video'] is None:
-            # Hero Section
-            st.markdown("""
-            <div style="text-align: center; padding: 40px 0;">
-                <h1 style="font-size: 3rem; background: -webkit-linear-gradient(left, #FF4B4B, #FF914D); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-                    Ask your videos anything.
-                </h1>
-                <p style="color: #8B949E; font-size: 1.2rem;">
-                    Your personal video intelligence hub.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+            # Hero Section only if history is empty
+            if not st.session_state['chat_history']:
+                st.markdown("""
+                <div style="text-align: center; padding: 40px 0;">
+                    <h1 style="font-size: 3rem; background: -webkit-linear-gradient(left, #FF4B4B, #FF914D); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                        Ask your videos anything.
+                    </h1>
+                    <p style="color: #8B949E; font-size: 1.2rem;">
+                        Your personal video intelligence hub.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
 
+            # 1. RENDER HISTORY (The Loop)
+            # We iterate through the list to show all previous Q&A
+            for i, msg in enumerate(st.session_state['chat_history']):
+                with st.chat_message(msg['role'], avatar="⚡" if msg['role'] == "assistant" else None):
+                    st.write(msg['content'])
+
+                    # If this message has sources, show them (even if it's old!)
+                    if "sources" in msg and msg['sources']:
+                        with st.expander("📚 Sources"):
+                            for idx, match in enumerate(msg['sources']):
+                                c1, c2 = st.columns([4, 1])
+                                with c1:
+                                    st.caption(f"**{match['video_name']}**: *{match['text'][:100]}...*")
+                                with c2:
+                                    # Unique key ensures we can play any video from history
+                                    if st.button("Play", key=f"hist_{i}_{idx}"):
+                                        st.session_state['selected_video'] = match['video_name']
+                                        st.session_state['start_time'] = match['start_time']
+                                        st.rerun()
+
+            # 2. INPUT AREA
             user_query = st.chat_input("Search across your entire library...")
 
-            # Show Previous Query/History
-            if 'previous_query' in st.session_state and st.session_state['previous_query']:
-                with st.chat_message("user"):
-                    st.write(st.session_state['previous_query'])
-
-                if 'ai_answer' in st.session_state:
-                    with st.chat_message("assistant", avatar="⚡"):
-                        st.write(st.session_state['ai_answer'])
-
-                        if st.session_state.get('global_matches'):
-                            with st.expander("📚 View Sources"):
-                                for idx, match in enumerate(st.session_state['global_matches']):
-                                    c1, c2 = st.columns([4, 1])
-                                    with c1:
-                                        st.caption(f"**{match['video_name']}**: *{match['text'][:100]}...*")
-                                    with c2:
-                                        if st.button("Play", key=f"src_{idx}"):
-                                            st.session_state['selected_video'] = match['video_name']
-                                            st.session_state['start_time'] = match['start_time']
-                                            st.rerun()
-
             if user_query:
-                st.session_state['previous_query'] = user_query
-                with st.spinner("🧠 Thinking..."):
-                    matches = query_engine.search_all_collections(user_query, username)
-                    st.session_state['global_matches'] = matches
-                    if matches:
-                        ai_response = query_engine.ask_gemini(user_query, matches, st.session_state['gemini_api_key'])
-                        st.session_state['ai_answer'] = ai_response
-                    else:
-                        st.session_state['ai_answer'] = "I couldn't find any relevant information in your library."
-                st.rerun()
+                # Append User Query
+                st.session_state['chat_history'].append({"role": "user", "content": user_query})
 
-        # --- SCENARIO B: Watching Specific Video (FIXED) ---
+                with st.chat_message("user"):
+                    st.write(user_query)
+
+                # Generate Answer
+                with st.chat_message("assistant", avatar="⚡"):
+                    with st.spinner("🧠 Thinking..."):
+                        matches = query_engine.search_all_collections(user_query, username)
+                        if matches:
+                            ai_response = query_engine.ask_gemini(user_query, matches,
+                                                                  st.session_state['gemini_api_key'])
+
+                            # Save Answer AND Sources to history
+                            st.session_state['chat_history'].append({
+                                "role": "assistant",
+                                "content": ai_response,
+                                "sources": matches
+                            })
+                            st.rerun()  # Rerun to render the new message in the loop above
+                        else:
+                            msg = "I couldn't find any relevant information in your library."
+                            st.session_state['chat_history'].append({"role": "assistant", "content": msg})
+                            st.rerun()
+
+        # --- SCENARIO B: Watching Video ---
         else:
             col_back, col_title = st.columns([1, 8])
             with col_back:
@@ -201,15 +209,13 @@ def main_app():
                 video_player = st.empty()
                 start_ts = st.session_state.get('start_time', 0)
 
-                # --- TWEAKED FIX: REMOVED 'key' (Prevents crash) ---
-                # Added .empty() above to try and clear the previous video
+                # --- FIX: Removed 'key' parameter, added .empty() ---
+                # This clears the previous player and forces a new one at the new time
                 video_player.empty()
-                video_player.video(
-                    video_path,
-                    start_time=int(start_ts)
-                )
+                video_player.video(video_path, start_time=int(start_ts))
 
             with col_chat:
+                # Pass control to query engine (which now supports history)
                 query_engine.render_search_ui(
                     selected_vid, video_path, video_player, username, st.session_state['gemini_api_key']
                 )
