@@ -24,13 +24,12 @@ def get_user_paths(username):
     user_folder = os.path.join(BASE_DB_FOLDER, "users", username)
     videos_dir = os.path.join(user_folder, "videos")
     chroma_dir = os.path.join(user_folder, "chroma_db")
-    thumbnails_dir = os.path.join(user_folder, "thumbnails")  # <--- NEW
+    thumbnails_dir = os.path.join(user_folder, "thumbnails")
 
     os.makedirs(videos_dir, exist_ok=True)
     os.makedirs(chroma_dir, exist_ok=True)
-    os.makedirs(thumbnails_dir, exist_ok=True)  # <--- NEW
+    os.makedirs(thumbnails_dir, exist_ok=True)
 
-    # Now returns 3 values, fixing the crash
     return videos_dir, chroma_dir, thumbnails_dir
 
 
@@ -180,20 +179,36 @@ def get_videos_list(username):
     return [f for f in os.listdir(videos_dir) if f.endswith(('.mp4', '.mov', '.avi'))]
 
 
+# === 🎨 NEW DESIGN: Upload Page ===
 def render_upload_page(username):
-    st.title("☁️ Upload Center")
+    st.title("📥 Import Content")
+    st.markdown("Add new videos to your personal knowledge base.")
+
     videos_dir, chroma_dir, _ = get_user_paths(username)
 
-    with st.container(border=True):
-        uploaded_file = st.file_uploader("Select Video File", type=["mp4", "mov", "avi"])
-        if uploaded_file:
-            file_path = os.path.join(videos_dir, uploaded_file.name)
+    # 1. Fake Storage Status Bar (Aesthetic)
+    col_stat1, col_stat2 = st.columns([3, 1])
+    with col_stat1:
+        st.progress(45, text="Cloud Storage Usage (Demo)")
+    with col_stat2:
+        st.caption("🚀 4.5GB / 10GB Used")
 
-            if st.button("Start Processing 🚀", type="primary", use_container_width=True):
+    st.divider()
+
+    # 2. Upload Area
+    with st.container(border=True):
+        st.markdown("### 📤 Drag & Drop Video")
+        uploaded_file = st.file_uploader("", type=["mp4", "mov", "avi"], label_visibility="collapsed")
+
+        if uploaded_file:
+            st.info(f"Ready to process: **{uploaded_file.name}**")
+
+            if st.button("Start Processing ⚡", type="primary", use_container_width=True):
+                file_path = os.path.join(videos_dir, uploaded_file.name)
                 with open(file_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-                st.toast("Upload Complete! Processing started.")
+                st.toast("Upload Complete! AI Processing started.")
                 thread = threading.Thread(
                     target=process_video_in_background,
                     args=(file_path, uploaded_file.name, chroma_dir, username)
@@ -203,37 +218,54 @@ def render_upload_page(username):
                 st.rerun()
 
 
+# === 🎨 NEW DESIGN: Library Page (Grid Layout) ===
 def render_library_page(username):
-    st.title(f"📚 {username}'s Library")
+    st.title("🎬 My Studio")
 
     videos = get_videos_list(username)
-    if not videos:
-        st.info("Your library is empty.")
-        return
-
     _, _, thumbnails_dir = get_user_paths(username)
 
-    for vid in videos:
-        with st.container(border=True):
-            col_thumb, col_details, col_actions = st.columns([1.5, 3, 1])
+    if not videos:
+        st.info("Your library is empty. Go to 'Import' to add videos.")
+        return
 
-            with col_thumb:
-                thumb_path = os.path.join(thumbnails_dir, f"{vid}.jpg")
-                if os.path.exists(thumb_path):
-                    st.image(thumb_path, use_container_width=True)
-                else:
-                    st.markdown("🎥 **No Preview**")
+    # --- GRID LAYOUT LOGIC ---
+    # We want 3 videos per row
+    cols_per_row = 3
+    rows = [videos[i:i + cols_per_row] for i in range(0, len(videos), cols_per_row)]
 
-            with col_details:
-                st.subheader(vid)
+    for row_videos in rows:
+        cols = st.columns(cols_per_row)
+        for idx, vid in enumerate(row_videos):
+            with cols[idx]:
+                # Card Container
+                with st.container(border=True):
+                    # Thumbnail
+                    thumb_path = os.path.join(thumbnails_dir, f"{vid}.jpg")
+                    if os.path.exists(thumb_path):
+                        st.image(thumb_path, use_container_width=True)
+                    else:
+                        # Placeholder if no thumbnail
+                        st.markdown(
+                            f'<div style="height:120px; background-color:#333; display:flex; align-items:center; justify-content:center; color:white;">No Preview</div>',
+                            unsafe_allow_html=True
+                        )
 
-            with col_actions:
-                st.write("")
-                if st.button("Open", key=f"open_{vid}", type="primary", use_container_width=True):
-                    st.session_state['selected_video'] = vid
-                    st.session_state['current_page'] = "Chat Workspace"
-                    st.rerun()
+                    # Title (Truncated if too long)
+                    display_name = vid if len(vid) < 20 else vid[:17] + "..."
+                    st.markdown(f"**{display_name}**")
 
-                if st.button("Delete", key=f"del_{vid}", use_container_width=True):
-                    delete_video(username, vid)
-                    st.rerun()
+                    # Actions Row
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        # This "Open" button sends you to the Chat Page
+                        # Must match the NEW name in app.py ("✨ AI Chat")
+                        if st.button("Open", key=f"open_{vid}", type="secondary", use_container_width=True):
+                            st.session_state['selected_video'] = vid
+                            st.session_state['current_page'] = "✨ AI Chat"
+                            st.rerun()
+
+                    with c2:
+                        if st.button("🗑️", key=f"del_{vid}", use_container_width=True):
+                            delete_video(username, vid)
+                            st.rerun()
