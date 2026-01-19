@@ -113,29 +113,36 @@ def ask_gemini(query, context_results, api_key):
         return format_local_fallback(query, context_results, str(e))
 
 
-# --- MAIN UI FUNCTION (SCROLLABLE CHAT) ---
+# --- LOCK CALLBACK ---
+def lock_video_chat():
+    st.session_state['processing_video'] = True
+
+
+# --- MAIN UI FUNCTION ---
 def render_search_ui(selected_video_name, video_path, video_player_placeholder, username, api_key):
     st.markdown("### 💬 Chat with Video")
 
-    # 1. Initialize History
+    # 1. Initialize State
     if 'video_chat_history' not in st.session_state:
         st.session_state['video_chat_history'] = []
 
+    # Check for video switch
     if 'last_video_name' not in st.session_state:
         st.session_state['last_video_name'] = selected_video_name
     elif st.session_state['last_video_name'] != selected_video_name:
         st.session_state['video_chat_history'] = []
         st.session_state['last_video_name'] = selected_video_name
 
-    # 2. Render Previous Messages (SCROLLABLE CONTAINER)
-    # גובה 500 פיקסלים בדרך כלל מתאים לגובה של נגן וידאו סטנדרטי
-    chat_container = st.container(height=500)
+    # Lock state for this specific component
+    if 'processing_video' not in st.session_state:
+        st.session_state['processing_video'] = False
 
+    # 2. Scrollable Container
+    chat_container = st.container(height=500)
     with chat_container:
         for i, msg in enumerate(st.session_state['video_chat_history']):
             with st.chat_message(msg['role'], avatar="🤖" if msg['role'] == "assistant" else None):
                 st.write(msg['content'])
-
                 if msg.get('sources'):
                     st.caption("📍 **Found at:**")
                     for idx, res in enumerate(msg['sources']):
@@ -144,8 +151,12 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
                             st.session_state['start_time'] = res['start_time']
                             st.rerun()
 
-    # 3. Chat Input (נשאר בחוץ כדי להיות דבוק למטה)
-    query = st.chat_input("Ask about this video...")
+    # 3. Locked Chat Input
+    query = st.chat_input(
+        "Ask about this video...",
+        on_submit=lock_video_chat,
+        disabled=st.session_state['processing_video']
+    )
 
     if query and selected_video_name:
         st.session_state['video_chat_history'].append({"role": "user", "content": query})
@@ -169,11 +180,13 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
                         "content": ai_answer,
                         "sources": valid_results
                     })
-                    st.rerun()
         else:
             st.session_state['video_chat_history'].append({
                 "role": "assistant",
                 "content": "No matches found.",
                 "sources": []
             })
-            st.rerun()
+
+        # UNLOCK AND RERUN
+        st.session_state['processing_video'] = False
+        st.rerun()
