@@ -1,7 +1,8 @@
 import sqlite3
-import hashlib
+import bcrypt  # Library for secure hashing
 import streamlit as st
 import os
+import re
 
 # Configuration
 BASE_DB_FOLDER = "Database"
@@ -15,30 +16,56 @@ if not os.path.exists(BASE_DB_FOLDER):
 def init_user_db():
     conn = sqlite3.connect(USERS_DB_FILE)
     c = conn.cursor()
+    # Note: We store password as BLOB (binary) now for bcrypt compatibility
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
-            password TEXT
+            password BLOB
         )
     ''')
     conn.commit()
     conn.close()
 
 
-def make_hashes(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
+# --- SECURITY & VALIDATION ---
+
+def validate_password(password):
+    """
+    Enforces password complexity:
+    1. At least 6 characters long
+    2. Contains at least one digit
+    """
+    if len(password) < 6:
+        return False, "Password must be at least 6 characters long."
+    if not re.search(r"\d", password):
+        return False, "Password must contain at least one number."
+    return True, ""
 
 
-def check_hashes(password, hashed_text):
-    if make_hashes(password) == hashed_text:
-        return True
-    return False
+def hash_password(password):
+    """Securely hashes a password using bcrypt."""
+    # bcrypt requires bytes, so we encode the string
+    # gensalt() adds random data so identical passwords have different hashes
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
+
+def check_password(password, hashed_pw):
+    """Checks a password against its hash."""
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), hashed_pw)
+    except ValueError:
+        return False
+
+
+# --- DB OPERATIONS ---
 
 def add_user(username, password):
     conn = sqlite3.connect(USERS_DB_FILE)
     c = conn.cursor()
-    hashed_pw = make_hashes(password)
+
+    # Securely hash the password before saving
+    hashed_pw = hash_password(password)
+
     try:
         c.execute('INSERT INTO users(username, password) VALUES (?,?)', (username, hashed_pw))
         conn.commit()
@@ -52,53 +79,56 @@ def add_user(username, password):
 def login_user(username, password):
     conn = sqlite3.connect(USERS_DB_FILE)
     c = conn.cursor()
-    hashed_pw = make_hashes(password)
-    c.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, hashed_pw))
-    data = c.fetchall()
+    c.execute('SELECT password FROM users WHERE username = ?', (username,))
+    data = c.fetchone()
     conn.close()
-    return data
 
+    if data:
+        stored_hash = data[0]
+        # Verify the password against the stored hash
+        if check_password(password, stored_hash):
+            return True
+
+    return False
+
+
+# --- UI ---
 
 def render_login_ui():
-    # 1. Custom CSS to clean up the top padding and center things nicely
     st.markdown("""
         <style>
-            .block-container {
-                padding-top: 3rem;
-                padding-bottom: 2rem;
-            }
+            .block-container { padding-top: 3rem; padding-bottom: 2rem; }
         </style>
     """, unsafe_allow_html=True)
 
-    # 2. Use columns to center the content (Left Spacer | Content | Right Spacer)
     col1, col2, col3 = st.columns([1, 1.5, 1])
 
     with col2:
-        # Header with centered text and emoji
         st.markdown("<h1 style='text-align: center;'>🎬 PinPoint</h1>", unsafe_allow_html=True)
         st.markdown(
             "<p style='text-align: center; color: grey; margin-bottom: 30px;'>Sign in to access your knowledge base</p>",
             unsafe_allow_html=True)
 
-        # 3. Use a Container with a border to create a "Card" look
         with st.container(border=True):
-            # Add icons to tabs for better visuals
             tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
 
             # --- Login Tab ---
             with tab1:
-                st.write("")  # Add a little breathing room
-                username = st.text_input("Username", key="login_user")
-                password = st.text_input("Password", type='password', key="login_pass")
-
                 st.write("")
-                # use_container_width=True makes the button stretch to match inputs
-                # type="primary" makes it red/bold (the theme color)
-                if st.button("Log In", use_container_width=True, type="primary"):
+                # WRAP IN FORM: This enables 'Press Enter' to submit
+                with st.form("login_form"):
+                    username = st.text_input("Username")
+                    password = st.text_input("Password", type='password')
+
+                    st.write("")
+                    # The form_submit_button triggers the form logic
+                    submit_login = st.form_submit_button("Log In", type="primary", use_container_width=True)
+
+                if submit_login:
                     if login_user(username, password):
                         st.session_state['logged_in'] = True
                         st.session_state['username'] = username
-                        st.toast(f"Welcome back, {username}!")  # Nice popup effect
+                        st.toast(f"Welcome back, {username}!")
                         st.rerun()
                     else:
                         st.error("Incorrect Username or Password")
@@ -106,12 +136,26 @@ def render_login_ui():
             # --- Sign Up Tab ---
             with tab2:
                 st.write("")
-                new_user = st.text_input("Choose a Username", key="signup_user")
-                new_password = st.text_input("Choose a Password", type='password', key="signup_pass")
+                with st.form("signup_form"):
+                    new_user = st.text_input("Choose a Username")
+                    new_password = st.text_input("Choose a Password", type='password')
 
-                st.write("")
-                if st.button("Create Account", use_container_width=True):
-                    if add_user(new_user, new_password):
-                        st.success("Account created! Please switch to Login tab.")
+                    st.write("")
+                    submit_signup = st.form_submit_button("Create Account", use_container_width=True)
+
+                if submit_signup:
+                    # 1. Check if empty
+                    if not new_user or not new_password:
+                        st.warning("Please fill in all fields.")
+
+                    # 2. Check Password Restrictions
                     else:
-                        st.warning("That username is taken.")
+                        is_valid, msg = validate_password(new_password)
+                        if not is_valid:
+                            st.error(msg)
+                        else:
+                            # 3. Try to add user
+                            if add_user(new_user, new_password):
+                                st.success("Account created! Switch to Login tab.")
+                            else:
+                                st.warning("That username is taken.")

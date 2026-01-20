@@ -1,7 +1,8 @@
-streamlit
+streamlit~=1.53.0
 openai-whisper
-chromadb
+chromadb~=1.4.1
 sentence-transformers
 google-generativeai
-torch
+torch~=2.5.1+cu121
 watchdog
+bcrypt~=5.0.0

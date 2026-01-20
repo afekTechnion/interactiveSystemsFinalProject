@@ -1,29 +1,33 @@
 import streamlit as st
 import video_processor
+import torch
 from sentence_transformers import CrossEncoder
-from google import genai
+import google.generativeai as genai
 
 # --- CONFIGURATION ---
+GEMINI_MODEL_NAME = "gemini-2.5-flash"
 INITIAL_TOP_K = 10
 FINAL_TOP_K = 3
-CONFIDENCE_THRESHOLD = 1
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_reranker():
-    return CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    if torch.cuda.is_available():
+        device = "cuda"
+        print("\n✅ GPU DETECTED: RUNNING IN FAST MODE\n")
+    else:
+        device = "cpu"
+        print("\n⚠️ GPU NOT FOUND: RUNNING IN SLOW CPU MODE\n")
+    return CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device=device)
 
 
 def expand_context(collection, center_id, window=1):
     try:
         base_name, index_str = center_id.rsplit('_', 1)
         current_idx = int(index_str)
-
         ids_to_fetch = []
         for i in range(current_idx - window, current_idx + window + 1):
-            if i >= 0:
-                ids_to_fetch.append(f"{base_name}_{i}")
-
+            if i >= 0: ids_to_fetch.append(f"{base_name}_{i}")
         data = collection.get(ids=ids_to_fetch)
         sorted_docs = sorted(zip(data['ids'], data['documents']), key=lambda x: int(x[0].rsplit('_', 1)[1]))
         full_text = " ".join([doc for _, doc in sorted_docs])
@@ -33,25 +37,22 @@ def expand_context(collection, center_id, window=1):
 
 
 def search_single_video(collection_name, query_text, username, n_results=5):
-    """מחפש בתוך וידאו ספציפי של משתמש ספציפי"""
-    _, chroma_dir = video_processor.get_user_paths(username)
+    _, chroma_dir, _ = video_processor.get_user_paths(username)
     client = video_processor.get_db_client(chroma_dir)
     try:
         collection = client.get_collection(collection_name)
-        results = collection.query(query_texts=[query_text], n_results=n_results)
-        return results
+        return collection.query(query_texts=[query_text], n_results=n_results)
     except ValueError:
         return None
 
 
 def search_all_collections(query_text, username):
-    videos_dir, chroma_dir = video_processor.get_user_paths(username)
+    videos_dir, chroma_dir, _ = video_processor.get_user_paths(username)
     client = video_processor.get_db_client(chroma_path=chroma_dir)
     videos = video_processor.get_videos_list(username)
-
     reranker = load_reranker()
-
     initial_candidates = []
+
     for video_name in videos:
         col_name = video_processor.get_safe_collection_name(video_name)
         try:
@@ -70,8 +71,7 @@ def search_all_collections(query_text, username):
         except Exception:
             continue
 
-    if not initial_candidates:
-        return []
+    if not initial_candidates: return []
 
     rerank_pairs = [[query_text, candidate['text']] for candidate in initial_candidates]
     scores = reranker.predict(rerank_pairs)
@@ -84,80 +84,109 @@ def search_all_collections(query_text, username):
     return initial_candidates[:FINAL_TOP_K]
 
 
+def format_local_fallback(query, context_results, error_msg):
+    response = f"**⚠️ Cloud AI Unavailable ({error_msg})**\n\n"
+    response += "Using **Local Fallback Mode**. Matches found:\n\n"
+    for i, item in enumerate(context_results):
+        response += f"**{i + 1}. {item.get('video_name', 'Video')}**\n> *\"{item['text']}\"*\n\n"
+    return response
+
+
 def ask_gemini(query, context_results, api_key):
-    if not api_key:
-        return "Please enter your Google API Key in the sidebar to generate an answer."
-
-    # --- NEW SYNTAX (google-genai) ---
+    if not api_key: return format_local_fallback(query, context_results, "No API Key")
     try:
-        # 1. Initialize the Client
-        client = genai.Client(api_key=api_key)
-
+        genai.configure(api_key=api_key)
         context_text = ""
-        for item in context_results:
-            context_text += f"- {item['text']}\n"
+        for item in context_results: context_text += f"- {item['text']}\n"
+        prompt = f"Answer based ONLY on context.\nContext:\n{context_text}\nQuestion: {query}\nAnswer:"
 
-        prompt = f"""
-        You are a helpful video assistant. 
-        Answer the user's question based ONLY on the context provided below.
-
-        Context:
-        {context_text}
-
-        User Question: {query}
-
-        Answer:
-        """
-
-        # 2. Generate Content using the Client
-        # Note: I changed the model to 'gemini-1.5-flash' because '2.5' does not exist yet.
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
-        return response.text
-
+        try:
+            model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+            return model.generate_content(prompt).text
+        except Exception:
+            try:
+                model = genai.GenerativeModel('gemini-pro')
+                return model.generate_content(prompt).text
+            except Exception as e:
+                return format_local_fallback(query, context_results, "Connection Failed")
     except Exception as e:
-        return f"Error connecting to Gemini: {e}"
+        return format_local_fallback(query, context_results, str(e))
 
 
+# --- LOCK CALLBACK ---
+def lock_video_chat():
+    st.session_state['processing_video'] = True
+
+
+# --- MAIN UI FUNCTION ---
 def render_search_ui(selected_video_name, video_path, video_player_placeholder, username, api_key):
-    st.subheader("Deep Search in Video")
-    query = st.text_input("Find specific moment in this video...", key="local_search")
+    st.markdown("### 💬 Chat with Video")
+
+    # 1. Initialize State
+    if 'video_chat_history' not in st.session_state:
+        st.session_state['video_chat_history'] = []
+
+    # Check for video switch
+    if 'last_video_name' not in st.session_state:
+        st.session_state['last_video_name'] = selected_video_name
+    elif st.session_state['last_video_name'] != selected_video_name:
+        st.session_state['video_chat_history'] = []
+        st.session_state['last_video_name'] = selected_video_name
+
+    # Lock state for this specific component
+    if 'processing_video' not in st.session_state:
+        st.session_state['processing_video'] = False
+
+    # 2. Scrollable Container
+    chat_container = st.container(height=500)
+    with chat_container:
+        for i, msg in enumerate(st.session_state['video_chat_history']):
+            with st.chat_message(msg['role'], avatar="🤖" if msg['role'] == "assistant" else None):
+                st.write(msg['content'])
+                if msg.get('sources'):
+                    st.caption("📍 **Found at:**")
+                    for idx, res in enumerate(msg['sources']):
+                        time_str = f"{int(res['start_time'] // 60):02d}:{int(res['start_time'] % 60):02d}"
+                        if st.button(f"▶ Play at {time_str}", key=f"vhist_{i}_{idx}", use_container_width=True):
+                            st.session_state['start_time'] = res['start_time']
+                            st.rerun()
+
+    # 3. Locked Chat Input
+    query = st.chat_input(
+        "Ask about this video...",
+        on_submit=lock_video_chat,
+        disabled=st.session_state['processing_video']
+    )
 
     if query and selected_video_name:
-        # Use the safe name converter
-        col_name = video_processor.get_safe_collection_name(selected_video_name)
+        st.session_state['video_chat_history'].append({"role": "user", "content": query})
 
-        # Pass the username
+        col_name = video_processor.get_safe_collection_name(selected_video_name)
         results = search_single_video(col_name, query, username)
 
         if results and results['documents']:
-            found_any = False
+            found_any = True
             valid_results = []
-
-            # 1. Filter results
             for i in range(len(results['documents'][0])):
-                score = results['distances'][0][i]
-                if score <= CONFIDENCE_THRESHOLD:
-                    found_any = True
-                    doc_text = results['documents'][0][i]
-                    start_time = results['metadatas'][0][i]['start_time']
-                    valid_results.append({'text': doc_text, 'start_time': start_time})
+                doc_text = results['documents'][0][i]
+                start_time = results['metadatas'][0][i]['start_time']
+                valid_results.append({'text': doc_text, 'start_time': start_time})
 
             if found_any:
-                # 2. GENERATE ANSWER (This uses the api_key you passed)
-                with st.spinner("Generating AI Answer..."):
+                with st.spinner("Analyzing..."):
                     ai_answer = ask_gemini(query, valid_results, api_key)
-                    st.markdown(f"**🤖 AI Answer:** {ai_answer}")
-                    st.divider()
+                    st.session_state['video_chat_history'].append({
+                        "role": "assistant",
+                        "content": ai_answer,
+                        "sources": valid_results
+                    })
+        else:
+            st.session_state['video_chat_history'].append({
+                "role": "assistant",
+                "content": "No matches found.",
+                "sources": []
+            })
 
-                # 3. Show Timestamps
-                for res in valid_results:
-                    time_str = f"{int(res['start_time'] // 60):02d}:{int(res['start_time'] % 60):02d}"
-                    with st.expander(f"Jump to {time_str}"):
-                        st.write(f"\"{res['text']}\"")
-                        if st.button(f"Play {time_str}", key=f"jump_{res['start_time']}"):
-                            video_player_placeholder.video(video_path, start_time=int(res['start_time']))
-            else:
-                st.warning("No matches found.")
+        # UNLOCK AND RERUN
+        st.session_state['processing_video'] = False
+        st.rerun()
