@@ -268,7 +268,6 @@ def render_library_page(username):
         return
 
     # --- GRID LAYOUT LOGIC ---
-    # We want 3 videos per row
     cols_per_row = 3
     rows = [videos[i:i + cols_per_row] for i in range(0, len(videos), cols_per_row)]
 
@@ -278,26 +277,42 @@ def render_library_page(username):
             with cols[idx]:
                 # Card Container
                 with st.container(border=True):
-                    # Thumbnail
+                    # 1. THUMBNAIL / PLACEHOLDER (Fixed Height)
                     thumb_path = os.path.join(thumbnails_dir, f"{vid}.jpg")
+
+                    # Common CSS: Forces 180px height and "cover" crop for all images
+                    # This ensures specific alignment regardless of video shape
+                    style_settings = "width: 100%; height: 180px; object-fit: cover; border-radius: 4px; margin-bottom: 10px;"
+
                     if os.path.exists(thumb_path):
-                        st.image(thumb_path, use_container_width=True)
+                        # Read and encode image to allow custom HTML styling
+                        try:
+                            with open(thumb_path, "rb") as img_file:
+                                b64_data = base64.b64encode(img_file.read()).decode()
+                            st.markdown(
+                                f'<img src="data:image/jpeg;base64,{b64_data}" style="{style_settings}">',
+                                unsafe_allow_html=True
+                            )
+                        except Exception:
+                            # Fallback if read fails
+                            st.markdown(
+                                f'<div style="{style_settings} background-color: #262730; display:flex; align-items:center; justify-content:center; color:white;">Error</div>',
+                                unsafe_allow_html=True
+                            )
                     else:
-                        # Placeholder if no thumbnail
+                        # Placeholder with EXACT same dimensions
                         st.markdown(
-                            f'<div style="height:120px; background-color:#333; display:flex; align-items:center; justify-content:center; color:white;">No Preview</div>',
+                            f'<div style="{style_settings} background-color: #262730; display:flex; align-items:center; justify-content:center; color:#8B949E;">No Preview</div>',
                             unsafe_allow_html=True
                         )
 
-                    # Title (Truncated if too long)
+                    # 2. TITLE
                     display_name = vid if len(vid) < 20 else vid[:17] + "..."
                     st.markdown(f"**{display_name}**")
 
-                    # Actions Row
+                    # 3. ACTIONS
                     c1, c2 = st.columns([2, 1])
                     with c1:
-                        # This "Open" button sends you to the Chat Page
-                        # Must match the NEW name in app.py ("✨ AI Chat")
                         if st.button("Open", key=f"open_{vid}", type="secondary", use_container_width=True):
                             st.session_state['selected_video'] = vid
                             st.session_state['current_page'] = "✨ AI Chat"
