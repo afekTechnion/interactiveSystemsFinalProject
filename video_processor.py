@@ -61,6 +61,31 @@ def update_progress(username, video_name, progress_percent, stage_name):
         json.dump(status_data, f)
 
 
+def create_completion_notification(username, video_name):
+    """Creates a temporary file to signal the frontend that a job is done."""
+    safe_name = get_safe_collection_name(video_name)
+    # Create a file named "done_username_videoname.flag"
+    note_file = os.path.join(PROCESSING_FOLDER, f"done_{username}_{safe_name}.flag")
+    with open(note_file, 'w') as f:
+        f.write(video_name)
+
+
+def get_and_clear_notifications(username):
+    """Checks for completion flags, returns the video names, and deletes the flags."""
+    completed_videos = []
+    # Search for files starting with "done_username_"
+    for f in os.listdir(PROCESSING_FOLDER):
+        if f.startswith(f"done_{username}_") and f.endswith(".flag"):
+            path = os.path.join(PROCESSING_FOLDER, f)
+            try:
+                with open(path, 'r') as file:
+                    completed_videos.append(file.read())
+                os.remove(path) # Delete immediately so we only notify once
+            except:
+                pass
+    return completed_videos
+
+
 def clear_progress(username, video_name):
     safe_name = get_safe_collection_name(video_name)
     status_file = os.path.join(PROCESSING_FOLDER, f"{username}_{safe_name}.json")
@@ -163,6 +188,7 @@ def process_video_in_background(file_path, video_name, chroma_path, username):
 
         collection.add(ids=ids, documents=documents, metadatas=metadatas)
         update_progress(username, video_name, 100, "Done!")
+        create_completion_notification(username, video_name)
         time.sleep(2)
 
     except Exception as e:

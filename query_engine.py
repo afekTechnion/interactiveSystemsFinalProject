@@ -1,6 +1,7 @@
 import streamlit as st
 import video_processor
 import torch
+import re
 from sentence_transformers import CrossEncoder
 import google.generativeai as genai
 
@@ -98,7 +99,21 @@ def ask_gemini(query, context_results, api_key):
         genai.configure(api_key=api_key)
         context_text = ""
         for item in context_results: context_text += f"- {item['text']}\n"
-        prompt = f"Answer based ONLY on context.\nContext:\n{context_text}\nQuestion: {query}\nAnswer:"
+        prompt = f"""
+                You are a helpful AI study assistant.
+
+                INSTRUCTIONS:
+                1. Answer the User Question primarily using the provided Context from the video.
+                2. You may elaborate or explain concepts further using your own knowledge to be more helpful.
+                3. CRITICAL: If the provided Context does NOT answer the question, answer based on your general knowledge, BUT you must start your answer with: "I couldn't find this in the video, but generally speaking..."
+
+                Context:
+                {context_text}
+
+                User Question: {query}
+
+                Answer:
+                """
 
         try:
             model = genai.GenerativeModel(GEMINI_MODEL_NAME)
@@ -116,6 +131,44 @@ def ask_gemini(query, context_results, api_key):
 # --- LOCK CALLBACK ---
 def lock_video_chat():
     st.session_state['processing_video'] = True
+
+
+def highlight_text(text, query):
+    if not query: return text[:100] + "..."  # Return short snippet if no query
+
+    words = query.lower().split()
+
+    # 1. SMART TRUNCATION: Find the first keyword and cut around it
+    first_match_index = -1
+    for w in words:
+        if len(w) > 2:
+            idx = text.lower().find(w)
+            if idx != -1:
+                first_match_index = idx
+                break
+
+    if first_match_index != -1:
+        # Start 30 chars before match, End 60 chars after match
+        start = max(0, first_match_index - 30)
+        end = min(len(text), first_match_index + 60)
+        snippet = "..." + text[start:end] + "..."
+    else:
+        # Fallback if no match found (rare)
+        snippet = text[:80] + "..."
+
+    # 2. FADED HIGHLIGHTING
+    highlighted = snippet
+    for w in words:
+        if len(w) > 2:
+            pattern = re.compile(re.escape(w), re.IGNORECASE)
+            # Use RGBA for transparency (0.3 = 30% opacity)
+            highlighted = pattern.sub(
+                lambda
+                    m: f'<span style="background-color: rgba(255, 215, 0, 0.3); color: inherit; padding: 0px 2px; border-radius: 4px;">{m.group(0)}</span>',
+                highlighted
+            )
+
+    return highlighted
 
 
 # --- MAIN UI FUNCTION ---
@@ -144,12 +197,26 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
             with st.chat_message(msg['role'], avatar="🤖" if msg['role'] == "assistant" else None):
                 st.write(msg['content'])
                 if msg.get('sources'):
-                    st.caption("📍 **Found at:**")
+                    st.divider()
+                    st.caption(f"Top {len(msg['sources'])} most relevant moments:")
+
                     for idx, res in enumerate(msg['sources']):
-                        time_str = f"{int(res['start_time'] // 60):02d}:{int(res['start_time'] % 60):02d}"
-                        if st.button(f"▶ Play at {time_str}", key=f"vhist_{i}_{idx}", use_container_width=True):
-                            st.session_state['start_time'] = res['start_time']
-                            st.rerun()
+                        # Create a card for each result
+                        with st.container(border=True):
+
+                            # 1. BUTTON ROW (Top)
+                            time_str = f"{int(res['start_time'] // 60):02d}:{int(res['start_time'] % 60):02d}"
+
+                            # 'use_container_width=True' makes the button stretch to fill the width (optional)
+                            if st.button(f"▶ Jump to {time_str}", key=f"vhist_{i}_{idx}", use_container_width=False):
+                                st.session_state['start_time'] = res['start_time']
+                                st.rerun()
+
+                            # 2. TEXT ROW (Bottom)
+                            # We use unsafe_allow_html=True so our yellow marker works
+                            st.markdown(
+                                f"<div style='margin-top: 10px; color: #CCCCCC;'>... \"{res['text']}\" ...</div>",
+                                unsafe_allow_html=True)
 
     # 3. Locked Chat Input
     query = st.chat_input(
@@ -170,7 +237,11 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
             for i in range(len(results['documents'][0])):
                 doc_text = results['documents'][0][i]
                 start_time = results['metadatas'][0][i]['start_time']
-                valid_results.append({'text': doc_text, 'start_time': start_time})
+
+                # This function now returns a SHORT snippet with FADED highlights
+                styled_text = highlight_text(doc_text, query)
+
+                valid_results.append({'text': styled_text, 'start_time': start_time})
 
             if found_any:
                 with st.spinner("Analyzing..."):
