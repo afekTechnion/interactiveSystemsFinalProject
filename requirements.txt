@@ -6,3 +6,5 @@ google-generativeai
 torch~=2.5.1+cu121
 watchdog
 bcrypt~=5.0.0
+opencv-python~=4.13.0.90
+fpdf~=1.7.2
