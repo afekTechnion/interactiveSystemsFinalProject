@@ -9,6 +9,7 @@ from chromadb.utils import embedding_functions
 import torch
 import base64
 import cv2  # Needed for thumbnails
+from fpdf import FPDF  # Add at the top with other imports
 
 # --- Configuration ---
 BASE_DB_FOLDER = "Database"
@@ -80,7 +81,7 @@ def get_and_clear_notifications(username):
             try:
                 with open(path, 'r') as file:
                     completed_videos.append(file.read())
-                os.remove(path) # Delete immediately so we only notify once
+                os.remove(path)  # Delete immediately so we only notify once
             except:
                 pass
     return completed_videos
@@ -198,6 +199,66 @@ def process_video_in_background(file_path, video_name, chroma_path, username):
         clear_progress(username, video_name)
 
 
+def create_pdf_bytes(title, content):
+    """Generates a PDF using standard fonts and safe character encoding."""
+    pdf = FPDF()
+    pdf.add_page()
+
+    # ניקוי סופי של תווים שאינם Latin-1 כדי למנוע קריסה של הקובץ
+    safe_content = content.encode('latin-1', 'replace').decode('latin-1')
+    safe_title = title.encode('latin-1', 'replace').decode('latin-1')
+
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, safe_title, ln=True)
+    pdf.ln(10)
+
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(0, 10, safe_content)  #
+
+    return bytes(pdf.output())
+
+
+@st.dialog("📊 Video Intelligence Summary")
+def show_summary_popup(video_name, username, api_key):
+    # ניהול State כדי לא להריץ את ה-AI בכל פעם שלוחצים על כפתור
+    state_key = f"summary_{video_name}"
+    if state_key not in st.session_state:
+        with st.spinner("Generating summary..."):
+            from query_engine import generate_video_summary
+            summary_text = generate_video_summary(video_name, username, api_key)
+            st.session_state[state_key] = summary_text
+
+    summary_text = st.session_state[state_key]
+    st.markdown(summary_text)
+    st.divider()
+
+    # יצירת שתי עמודות להורדה - PDF ו-TXT
+    col_pdf, col_txt = st.columns(2)
+
+    with col_pdf:
+        try:
+            pdf_data = create_pdf_bytes(f"Summary: {video_name}", summary_text)
+            st.download_button(
+                label="📥 Download PDF",
+                data=pdf_data,
+                file_name=f"{video_name}_summary.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        except Exception:
+            st.error("PDF Error")
+
+    with col_txt:
+        # גיבוי קבוע בפורמט TXT שתמיד עובד
+        st.download_button(
+            label="📄 Download TXT",
+            data=summary_text,
+            file_name=f"{video_name}_summary.txt",
+            mime="text/plain",
+            use_container_width=True
+        )  #
+
+
 # --- UI Functions ---
 def get_videos_list(username):
     videos_dir, _, _ = get_user_paths(username)
@@ -309,16 +370,18 @@ def render_library_page(username):
                     # 2. TITLE
                     display_name = vid if len(vid) < 20 else vid[:17] + "..."
                     st.markdown(f"**{display_name}**")
-
-                    # 3. ACTIONS
-                    c1, c2 = st.columns([2, 1])
+                    # 3. BUTTON ACTIONS ROW
+                    c1, c2, c3 = st.columns([1, 1, 1])
                     with c1:
-                        if st.button("Open", key=f"open_{vid}", type="secondary", use_container_width=True):
+                        if st.button("Open", key=f"open_{vid}", use_container_width=True):
                             st.session_state['selected_video'] = vid
                             st.session_state['current_page'] = "✨ AI Chat"
                             st.rerun()
-
                     with c2:
+                        if st.button("📝", key=f"sum_{vid}", use_container_width=True):
+                            # This triggers the pop-up dialog
+                            show_summary_popup(vid, username, st.session_state.get('gemini_api_key', ""))
+                    with c3:
                         if st.button("🗑️", key=f"del_{vid}", use_container_width=True):
                             delete_video(username, vid)
                             st.rerun()

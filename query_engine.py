@@ -128,6 +128,99 @@ def ask_gemini(query, context_results, api_key):
         return format_local_fallback(query, context_results, str(e))
 
 
+def generate_video_summary(video_name, username, api_key):
+    """Retrieves the full transcript and generates a structured AI summary."""
+    if not api_key:
+        return "Please provide a Gemini API Key in the sidebar."
+
+    # Get DB paths
+    _, chroma_dir, _ = video_processor.get_user_paths(username)
+    client = video_processor.get_db_client(chroma_dir)
+    col_name = video_processor.get_safe_collection_name(video_name)
+
+    try:
+        collection = client.get_collection(col_name)
+        all_data = collection.get()  # Fetch all segments
+
+        # Reconstruct transcript chronologically based on the ID suffix (_0, _1, etc)
+        sorted_indices = sorted(range(len(all_data['ids'])),
+                                key=lambda k: int(all_data['ids'][k].rsplit('_', 1)[1]))
+        full_transcript = " ".join([all_data['documents'][i] for i in sorted_indices])
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+
+        prompt = f"""
+            Analyze the following video transcript and provide a structured summary.
+
+            CRITICAL FORMATTING RULES:
+            1. Use ONLY standard ASCII characters. 
+            2. Do NOT use bullet points like '•'. Use simple dashes '-' instead.
+            3. Use standard straight quotes (") instead of curly quotes (“ ”).
+            4. Avoid any special mathematical symbols or emojis.
+
+            STRUCTURE:
+            - TL;DR: 2-sentence overview.
+            - Key Takeaways: Bulleted list (using '-').
+            - Detailed Narrative: Explanation of the content.
+
+            TRANSCRIPT:
+            {full_transcript}
+            """
+
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Summary failed: {str(e)}"
+
+
+def generate_quiz_question(video_name, username, api_key):
+    """שולף את הטרנסקריפט ומייצר שאלה טכנית משמעותית עם פתרון."""
+    if not api_key:
+        return "Please provide an API Key."
+
+    _, chroma_dir, _ = video_processor.get_user_paths(username)
+    client = video_processor.get_db_client(chroma_dir)
+    col_name = video_processor.get_safe_collection_name(video_name)
+
+    try:
+        collection = client.get_collection(col_name)  #
+        all_data = collection.get()
+        full_transcript = " ".join(all_data['documents'])
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(GEMINI_MODEL_NAME)  #
+
+        prompt = f"""
+                Analyze the following transcript and create one high-quality multiple-choice question.
+
+                FORMATTING RULES:
+                1. Use ONLY standard ASCII characters (No emojis, no special bullets).
+                2. Every option (A, B, C, D) MUST be on its own new line.
+                3. Use double newlines between the question and the options.
+
+                EXPECTED STRUCTURE:
+                Question: [Text]
+
+                A) [Option]
+
+                B) [Option]
+
+                C) [Option]
+
+                D) [Option]
+
+                Solution: [Correct letter + Explanation]
+
+                TRANSCRIPT:
+                {full_transcript}
+                """
+
+        return model.generate_content(prompt).text
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 # --- LOCK CALLBACK ---
 def lock_video_chat():
     st.session_state['processing_video'] = True
@@ -190,32 +283,53 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
     if 'processing_video' not in st.session_state:
         st.session_state['processing_video'] = False
 
+    if st.button("🧠 Challenge me with a question!", use_container_width=True):
+        with st.spinner("Analyzing video..."):
+            quiz_content = generate_quiz_question(selected_video_name, username, api_key)
+            # אנחנו מוסיפים את השאלה כהודעה מה-Assistant עם סימון מיוחד
+            st.session_state['video_chat_history'].append({
+                "role": "assistant",
+                "content": quiz_content,
+                "is_quiz": True  # סימון כדי שנדע להציג את הפתרון מוסתר
+            })
+            st.rerun()
+
     # 2. Scrollable Container
     chat_container = st.container(height=500)
     with chat_container:
         for i, msg in enumerate(st.session_state['video_chat_history']):
-            with st.chat_message(msg['role'], avatar="🤖" if msg['role'] == "assistant" else None):
-                st.write(msg['content'])
+            # Assistant uses a custom robot icon string or default avatar
+            avatar_style = "assistant" if msg['role'] == "assistant" else "user"
+            with st.chat_message(msg['role'], avatar=avatar_style):
+
+                # Specific rendering logic for quiz messages
+                if msg.get('is_quiz') and "Solution:" in msg['content']:
+                    q_part, s_part = msg['content'].split("Solution:")
+                    st.markdown(f"**Challenge Question:**\n\n{q_part}")
+                    with st.expander("Check the Answer"):
+                        st.success(s_part.strip())
+                else:
+                    # Standard text message rendering
+                    st.write(msg['content'])
+
                 if msg.get('sources'):
                     st.divider()
                     st.caption(f"Top {len(msg['sources'])} most relevant moments:")
 
                     for idx, res in enumerate(msg['sources']):
-                        # Create a card for each result
                         with st.container(border=True):
+                            # Time calculation for playback control
+                            minutes = int(res['start_time'] // 60)
+                            seconds = int(res['start_time'] % 60)
+                            time_str = f"{minutes:02d}:{seconds:02d}"
 
-                            # 1. BUTTON ROW (Top)
-                            time_str = f"{int(res['start_time'] // 60):02d}:{int(res['start_time'] % 60):02d}"
-
-                            # 'use_container_width=True' makes the button stretch to fill the width (optional)
-                            if st.button(f"▶ Jump to {time_str}", key=f"vhist_{i}_{idx}", use_container_width=False):
+                            if st.button(f"Jump to {time_str}", key=f"vhist_{i}_{idx}"):
                                 st.session_state['start_time'] = res['start_time']
                                 st.rerun()
 
-                            # 2. TEXT ROW (Bottom)
-                            # We use unsafe_allow_html=True so our yellow marker works
+                            # Render text with grey subtext styling
                             st.markdown(
-                                f"<div style='margin-top: 10px; color: #CCCCCC;'>... \"{res['text']}\" ...</div>",
+                                f"<div style='margin-top: 10px; color: #CCCCCC;'>... {res['text']} ...</div>",
                                 unsafe_allow_html=True)
 
     # 3. Locked Chat Input
