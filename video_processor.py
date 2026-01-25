@@ -52,6 +52,28 @@ def generate_thumbnail(video_path, thumbnail_path):
         print(f"Thumbnail error: {e}")
 
 
+def request_cancellation(username, video_name):
+    """Creates a file that signals the background thread to stop."""
+    safe_name = get_safe_collection_name(video_name)
+    cancel_file = os.path.join(PROCESSING_FOLDER, f"cancel_{username}_{safe_name}")
+    with open(cancel_file, "w") as f:
+        f.write("stop")
+
+
+def check_if_cancelled(username, video_name):
+    """Checks if a cancel flag exists."""
+    safe_name = get_safe_collection_name(video_name)
+    cancel_file = os.path.join(PROCESSING_FOLDER, f"cancel_{username}_{safe_name}")
+    if os.path.exists(cancel_file):
+        # Clean up the flag file immediately
+        try:
+            os.remove(cancel_file)
+        except:
+            pass
+        return True
+    return False
+
+
 # --- Status Management ---
 def update_progress(username, video_name, progress_percent, stage_name):
     safe_name = get_safe_collection_name(video_name)
@@ -123,17 +145,31 @@ def delete_video(username, video_name):
     videos_dir, chroma_dir, thumbnails_dir = get_user_paths(username)
     client = get_db_client(chroma_dir)
     col_name = get_safe_collection_name(video_name)
+
+    # 1. Delete Database Collection
     try:
         client.delete_collection(col_name)
     except:
         pass
 
+    # 2. Delete Files (Protected)
     vid_path = os.path.join(videos_dir, video_name)
     thumb_path = os.path.join(thumbnails_dir, f"{video_name}.jpg")
 
-    if os.path.exists(vid_path): os.remove(vid_path)
-    if os.path.exists(thumb_path): os.remove(thumb_path)
+    try:
+        if os.path.exists(vid_path): os.remove(vid_path)
+    except PermissionError:
+        print(f"⚠️ Could not delete {video_name} yet - file is in use. It will be cleaned up later.")
+    except Exception as e:
+        print(f"Error deleting file: {e}")
 
+    if os.path.exists(thumb_path):
+        try:
+            os.remove(thumb_path)
+        except:
+            pass
+
+    # 3. Clean Status
     clear_progress(username, video_name)
     return True
 
@@ -207,6 +243,12 @@ def process_video_in_background(file_path, video_name, chroma_path, username):
     generate_thumbnail(file_path, thumb_path)
 
     update_progress(username, video_name, 5, "Initializing AI Models...")
+
+    # Check 1: Early Cancel
+    if check_if_cancelled(username, video_name):
+        delete_video(username, video_name)
+        return
+
     try:
         model = load_whisper()
         client = get_db_client(chroma_path)
@@ -220,8 +262,29 @@ def process_video_in_background(file_path, video_name, chroma_path, username):
 
         collection = client.create_collection(name=collection_name, embedding_function=ef)
 
+        # Check 2: Before Blocking Operation
+        if check_if_cancelled(username, video_name):
+            delete_video(username, video_name)
+            return
+
         update_progress(username, video_name, 15, "Transcribing Audio...")
+
+        # --- BLOCKING OPERATION STARTS ---
         result = model.transcribe(file_path)
+        # --- BLOCKING OPERATION ENDS ---
+
+        # --- ZOMBIE CHECK ---
+        # Did the user force-cancel (delete the progress file) while we were stuck above?
+        safe_name = get_safe_collection_name(video_name)
+        status_file = os.path.join(PROCESSING_FOLDER, f"{username}_{safe_name}.json")
+
+        # If the status file is gone, the user clicked cancel. Stop and Cleanup.
+        if not os.path.exists(status_file):
+            print(f"Job {video_name} was abandoned. Cleaning up.")
+            delete_video(username, video_name)
+            return
+        # --------------------
+
         segments = result['segments']
 
         GROUP_SIZE = 3
@@ -231,6 +294,11 @@ def process_video_in_background(file_path, video_name, chroma_path, username):
         total_groups = len(segments) // GROUP_SIZE + 1
 
         for idx, i in enumerate(range(0, len(segments), GROUP_SIZE)):
+            # Check 3: Inside the loop (fast response)
+            if check_if_cancelled(username, video_name):
+                delete_video(username, video_name)
+                return
+
             group = segments[i: i + GROUP_SIZE]
             if not group: continue
             combined_text = " ".join([s['text'].strip() for s in group])
@@ -294,15 +362,28 @@ def get_videos_list(username):
 def render_upload_page(username):
     st.title("📥 Import Content")
 
-    # --- PROGESS SECTION START ---
+    # --- PROGRESS SECTION START ---
     active_jobs = get_active_progress(username)
     if active_jobs:
         st.info("🔄 Processing in background...")
         for job in active_jobs:
-            st.write(f"**{job['video']}**: {job['stage']}")
-            st.progress(job['progress'])
+            c_text, c_btn = st.columns([5, 1])
+            with c_text:
+                st.write(f"**{job['video']}**: {job['stage']}")
+                st.progress(job['progress'])
+            with c_btn:
+                st.write("")
+                if st.button("❌", key=f"cancel_{job['video']}", help="Cancel Processing"):
+                    # 1. Ask backend to stop (eventually)
+                    request_cancellation(username, job['video'])
 
-        # This causes the page to refresh, animating the bar
+                    # 2. FORCE HIDE: Delete the status file immediately so it vanishes from screen
+                    clear_progress(username, job['video'])
+
+                    st.toast(f"Cancelling {job['video']}...")
+                    time.sleep(0.5)
+                    st.rerun()
+
         time.sleep(1)
         st.rerun()
     # --- PROGRESS SECTION END ---
