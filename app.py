@@ -5,16 +5,16 @@ import auth
 import video_processor
 import query_engine
 
-# --- Setup ---
+
 st.set_page_config(
     layout="wide",
     page_title="PinPoint AI",
     page_icon="⚡",
-    initial_sidebar_state="expanded"  # <--- This forces it open
+    initial_sidebar_state="expanded"
 )
 
 
-# --- 🎨 PRO DESIGN: Custom CSS ---
+
 def load_css():
     st.markdown("""
         <style>
@@ -244,26 +244,49 @@ def main_app():
                     st.session_state['processing_global'] = False
                     st.rerun()
 
+
+        # --- SCENARIO B: Watching Video ---
+
         else:
-            # Watching Video Logic
-            col_back, col_title = st.columns([1, 8])
+            # 1. New Header Layout with Resizer
+            col_back, col_title, col_resize = st.columns([1, 5, 3])
+
             with col_back:
                 if st.button("⬅ Back"):
                     st.session_state['selected_video'] = None
+                    st.session_state['start_time'] = 0
                     st.rerun()
+
             with col_title:
                 st.subheader(f"🎬 {st.session_state['selected_video']}")
 
-            st.divider()
+            with col_resize:
+                # This slider acts as your "movable divider"
+                split_ratio = st.slider(
 
+                    "Adjust Layout",
+                    min_value=20,
+                    max_value=80,
+                    value=65,
+                    step=5,
+                    label_visibility="collapsed",
+                    help="Drag to resize the Video vs Chat area"
+                )
+
+            st.divider()
             selected_vid = st.session_state['selected_video']
             videos_dir, _, _ = video_processor.get_user_paths(username)
+
             video_path = os.path.join(videos_dir, selected_vid)
 
-            col_player, col_chat = st.columns([2, 1])
+            # 2. Dynamic Column Sizing based on Slider
+            # split_ratio is the Video width %, the rest is Chat width %
+            col_player, col_chat = st.columns([split_ratio, 100 - split_ratio])
+
             with col_player:
                 video_player = st.empty()
                 start_ts = st.session_state.get('start_time', 0)
+                video_player.empty()
                 video_player.video(video_path, start_time=int(start_ts))
 
             with col_chat:
