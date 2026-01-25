@@ -97,23 +97,27 @@ def ask_gemini(query, context_results, api_key):
     if not api_key: return format_local_fallback(query, context_results, "No API Key")
     try:
         genai.configure(api_key=api_key)
+
+        # Build a cleaner context string
         context_text = ""
-        for item in context_results: context_text += f"- {item['text']}\n"
+        for item in context_results:
+            context_text += f"--- Snippet from {item.get('video_name', 'video')} ---\n{item['text']}\n\n"
+
         prompt = f"""
-                You are a helpful AI study assistant.
+        You are a smart AI study assistant. Your goal is to help the user understand the video content.
 
-                INSTRUCTIONS:
-                1. Answer the User Question primarily using the provided Context from the video.
-                2. You may elaborate or explain concepts further using your own knowledge to be more helpful.
-                3. CRITICAL: If the provided Context does NOT answer the question, answer based on your general knowledge, BUT you must start your answer with: "I couldn't find this in the video, but generally speaking..."
+        INSTRUCTIONS:
+        1. **USE THE CONTEXT:** The provided text snippets are the most important source. Even if they only mention the topic briefly or contain related keywords, YOU MUST use them as the starting point for your answer.
+        2. **CONNECT THE DOTS:** If the context is relevant but incomplete, use your general knowledge to fill in the gaps and explain *how* the snippet relates to the question.
+        3. **FALLBACK:** IF AND ONLY IF the provided context is completely unrelated to the user's question, you MUST start your answer with the phrase "I couldn't find this in the video, but generally speaking..." followed by an answer that is not based on the context but on your own knowledge.
 
-                Context:
-                {context_text}
+        Context Snippets:
+        {context_text}
 
-                User Question: {query}
+        User Question: {query}
 
-                Answer:
-                """
+        Answer:
+        """
 
         try:
             model = genai.GenerativeModel(GEMINI_MODEL_NAME)
@@ -227,39 +231,65 @@ def lock_video_chat():
 
 
 def highlight_text(text, query):
-    if not query: return text[:100] + "..."  # Return short snippet if no query
+    if not query: return text[:100] + "..."
 
-    words = query.lower().split()
+    # 1. STOP WORDS LIST
+    # Common words to ignore so we don't highlight "what", "is", "the", etc.
+    STOP_WORDS = {
+        "what", "where", "when", "how", "who", "why", "which",
+        "the", "is", "are", "was", "were", "be", "been", "being",
+        "and", "or", "but", "if", "because", "as", "until", "while",
+        "of", "at", "by", "for", "with", "about", "against", "between",
+        "into", "through", "during", "before", "after", "above", "below",
+        "to", "from", "up", "down", "in", "out", "on", "off", "over", "under",
+        "again", "further", "then", "once", "here", "there", "all", "any",
+        "can", "will", "just", "don", "should", "now"
+    }
 
-    # 1. SMART TRUNCATION: Find the first keyword and cut around it
+    raw_words = query.lower().split()
+
+    # Filter: Keep words that are NOT stop words AND are > 2 chars
+    keywords = [w for w in raw_words if w not in STOP_WORDS and len(w) > 2]
+
+    # Fallback: If filtering removed everything (e.g. query was just "what is"),
+    # keep the original words to avoid breaking the logic.
+    if not keywords:
+        keywords = [w for w in raw_words if len(w) > 2]
+
+    # 2. PREPARE REGEX PATTERN (Smart Matching)
+    # We create a pattern that matches the keyword + any suffix (like 's', 'ing', 'ed')
+    # \b ensures it starts at a word boundary. \w* allows the suffix.
+    if keywords:
+        # Example pattern: \b(elephant\w*|tiger\w*)
+        pattern_str = r'\b(?:' + '|'.join([re.escape(w) + r'\w*' for w in keywords]) + r')'
+        regex = re.compile(pattern_str, re.IGNORECASE)
+    else:
+        regex = None
+
+    # 3. SMART TRUNCATION
+    # Find the first occurrence of ANY of our smart keywords
     first_match_index = -1
-    for w in words:
-        if len(w) > 2:
-            idx = text.lower().find(w)
-            if idx != -1:
-                first_match_index = idx
-                break
+    if regex:
+        match = regex.search(text)
+        if match:
+            first_match_index = match.start()
 
     if first_match_index != -1:
-        # Start 30 chars before match, End 60 chars after match
         start = max(0, first_match_index - 30)
         end = min(len(text), first_match_index + 60)
         snippet = "..." + text[start:end] + "..."
     else:
-        # Fallback if no match found (rare)
         snippet = text[:80] + "..."
 
-    # 2. FADED HIGHLIGHTING
-    highlighted = snippet
-    for w in words:
-        if len(w) > 2:
-            pattern = re.compile(re.escape(w), re.IGNORECASE)
-            # Use RGBA for transparency (0.3 = 30% opacity)
-            highlighted = pattern.sub(
-                lambda
-                    m: f'<span style="background-color: rgba(255, 215, 0, 0.3); color: inherit; padding: 0px 2px; border-radius: 4px;">{m.group(0)}</span>',
-                highlighted
-            )
+    # 4. APPLY FADED HIGHLIGHT
+    if regex:
+        highlighted = regex.sub(
+            lambda
+                m: f'<span style="background-color: rgba(255, 215, 0, 0.3); color: inherit; padding: 0px 2px; border-radius: 4px;">{m.group(0)}</span>',
+            snippet
+        )
+    else:
+        highlighted = snippet
 
     return highlighted
 

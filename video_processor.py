@@ -9,7 +9,6 @@ from chromadb.utils import embedding_functions
 import torch
 import base64
 import cv2  # Needed for thumbnails
-from fpdf import FPDF  # Add at the top with other imports
 
 # --- Configuration ---
 BASE_DB_FOLDER = "Database"
@@ -139,6 +138,67 @@ def delete_video(username, video_name):
     return True
 
 
+def rename_video(username, old_name, new_name_base):
+    """
+    Renames video file, thumbnail, and migrates the ChromaDB collection.
+    new_name_base: The new name WITHOUT extension (e.g., "My Holiday" not "My Holiday.mp4")
+    """
+    videos_dir, chroma_dir, thumbnails_dir = get_user_paths(username)
+
+    # 1. Determine extensions and full paths
+    _, ext = os.path.splitext(old_name)
+    new_full_name = f"{new_name_base}{ext}"
+
+    old_vid_path = os.path.join(videos_dir, old_name)
+    new_vid_path = os.path.join(videos_dir, new_full_name)
+
+    if os.path.exists(new_vid_path):
+        return False, "A video with this name already exists."
+
+    try:
+        # 2. Rename Video File
+        os.rename(old_vid_path, new_vid_path)
+
+        # 3. Rename Thumbnail
+        old_thumb = os.path.join(thumbnails_dir, f"{old_name}.jpg")
+        new_thumb = os.path.join(thumbnails_dir, f"{new_full_name}.jpg")
+        if os.path.exists(old_thumb):
+            os.rename(old_thumb, new_thumb)
+
+        # 4. Migrate ChromaDB Collection
+        # We must change the collection name because it is a hash of the filename
+        client = get_db_client(chroma_dir)
+        old_col_name = get_safe_collection_name(old_name)
+        new_col_name = get_safe_collection_name(new_full_name)
+
+        try:
+            collection = client.get_collection(old_col_name)
+            # Rename the collection itself
+            collection.modify(name=new_col_name)
+
+            # Optional: Update metadata inside the collection (Good practice)
+            # This ensures internal metadata matches the new filename
+            all_ids = collection.get()['ids']
+            if all_ids:
+                # Update 'video_name' in metadata for all segments
+                # Note: We keep other metadata fields intact if possible,
+                # but simplistic update is safer here to avoid complex logic.
+                # For this specific app, we only really rely on 'start_time' and 'video_name'
+                # We will skip metadata update to prevent timeouts on large videos,
+                # as the app logic relies on the filename (which we just changed).
+                pass
+
+        except Exception as e:
+            print(f"Chroma Rename Warning: {e}")
+            # If collection doesn't exist (e.g. video wasn't processed), we just skip it
+            pass
+
+        return True, new_full_name
+
+    except Exception as e:
+        return False, str(e)
+
+
 def process_video_in_background(file_path, video_name, chroma_path, username):
     _, _, thumbnails_dir = get_user_paths(username)
     thumb_path = os.path.join(thumbnails_dir, f"{video_name}.jpg")
@@ -199,28 +259,9 @@ def process_video_in_background(file_path, video_name, chroma_path, username):
         clear_progress(username, video_name)
 
 
-def create_pdf_bytes(title, content):
-    """Generates a PDF using standard fonts and safe character encoding."""
-    pdf = FPDF()
-    pdf.add_page()
-
-    # ניקוי סופי של תווים שאינם Latin-1 כדי למנוע קריסה של הקובץ
-    safe_content = content.encode('latin-1', 'replace').decode('latin-1')
-    safe_title = title.encode('latin-1', 'replace').decode('latin-1')
-
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, safe_title, ln=True)
-    pdf.ln(10)
-
-    pdf.set_font("Helvetica", size=12)
-    pdf.multi_cell(0, 10, safe_content)  #
-
-    return bytes(pdf.output())
-
-
-@st.dialog("📊 Video Intelligence Summary")
+@st.dialog("📊 Video Intelligence Summary", width="large")
 def show_summary_popup(video_name, username, api_key):
-    # ניהול State כדי לא להריץ את ה-AI בכל פעם שלוחצים על כפתור
+    # Manage State to prevent re-running AI on every interaction
     state_key = f"summary_{video_name}"
     if state_key not in st.session_state:
         with st.spinner("Generating summary..."):
@@ -232,31 +273,14 @@ def show_summary_popup(video_name, username, api_key):
     st.markdown(summary_text)
     st.divider()
 
-    # יצירת שתי עמודות להורדה - PDF ו-TXT
-    col_pdf, col_txt = st.columns(2)
-
-    with col_pdf:
-        try:
-            pdf_data = create_pdf_bytes(f"Summary: {video_name}", summary_text)
-            st.download_button(
-                label="📥 Download PDF",
-                data=pdf_data,
-                file_name=f"{video_name}_summary.pdf",
-                mime="application/pdf",
-                use_container_width=True
-            )
-        except Exception:
-            st.error("PDF Error")
-
-    with col_txt:
-        # גיבוי קבוע בפורמט TXT שתמיד עובד
-        st.download_button(
-            label="📄 Download TXT",
-            data=summary_text,
-            file_name=f"{video_name}_summary.txt",
-            mime="text/plain",
-            use_container_width=True
-        )  #
+    # Only TXT download option remains
+    st.download_button(
+        label="📄 Download TXT",
+        data=summary_text,
+        file_name=f"{video_name}_summary.txt",
+        mime="text/plain",
+        use_container_width=True
+    )
 
 
 # --- UI Functions ---
@@ -328,6 +352,10 @@ def render_library_page(username):
         st.info("Your library is empty. Go to 'Import' to add videos.")
         return
 
+    # Initialize edit state if not exists
+    if 'renaming_video' not in st.session_state:
+        st.session_state['renaming_video'] = None
+
     # --- GRID LAYOUT LOGIC ---
     cols_per_row = 3
     rows = [videos[i:i + cols_per_row] for i in range(0, len(videos), cols_per_row)]
@@ -338,15 +366,11 @@ def render_library_page(username):
             with cols[idx]:
                 # Card Container
                 with st.container(border=True):
-                    # 1. THUMBNAIL / PLACEHOLDER (Fixed Height)
+                    # 1. THUMBNAIL (Fixed Height)
                     thumb_path = os.path.join(thumbnails_dir, f"{vid}.jpg")
-
-                    # Common CSS: Forces 180px height and "cover" crop for all images
-                    # This ensures specific alignment regardless of video shape
                     style_settings = "width: 100%; height: 180px; object-fit: cover; border-radius: 4px; margin-bottom: 10px;"
 
                     if os.path.exists(thumb_path):
-                        # Read and encode image to allow custom HTML styling
                         try:
                             with open(thumb_path, "rb") as img_file:
                                 b64_data = base64.b64encode(img_file.read()).decode()
@@ -355,31 +379,59 @@ def render_library_page(username):
                                 unsafe_allow_html=True
                             )
                         except Exception:
-                            # Fallback if read fails
-                            st.markdown(
-                                f'<div style="{style_settings} background-color: #262730; display:flex; align-items:center; justify-content:center; color:white;">Error</div>',
-                                unsafe_allow_html=True
-                            )
+                            st.markdown(f'<div style="{style_settings} background-color: #262730;">Error</div>',
+                                        unsafe_allow_html=True)
                     else:
-                        # Placeholder with EXACT same dimensions
-                        st.markdown(
-                            f'<div style="{style_settings} background-color: #262730; display:flex; align-items:center; justify-content:center; color:#8B949E;">No Preview</div>',
-                            unsafe_allow_html=True
-                        )
+                        st.markdown(f'<div style="{style_settings} background-color: #262730;">No Preview</div>',
+                                    unsafe_allow_html=True)
 
-                    # 2. TITLE
-                    display_name = vid if len(vid) < 20 else vid[:17] + "..."
-                    st.markdown(f"**{display_name}**")
-                    # 3. BUTTON ACTIONS ROW
-                    c1, c2, c3 = st.columns([1, 1, 1])
+                    # 2. TITLE SECTION (With Rename Logic)
+                    if st.session_state['renaming_video'] == vid:
+                        # --- EDIT MODE ---
+                        base_name = os.path.splitext(vid)[0]
+                        new_name_input = st.text_input("New Name", value=base_name, key=f"input_{vid}",
+                                                       label_visibility="collapsed")
+
+                        c_save, c_cancel = st.columns(2)
+                        with c_save:
+                            if st.button("💾 Save", key=f"save_{vid}", use_container_width=True):
+                                if new_name_input and new_name_input != base_name:
+                                    success, msg = rename_video(username, vid, new_name_input)
+                                    if success:
+                                        st.session_state['renaming_video'] = None
+                                        st.toast(f"Renamed to {msg}")
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
+                                else:
+                                    # No change
+                                    st.session_state['renaming_video'] = None
+                                    st.rerun()
+                        with c_cancel:
+                            if st.button("❌", key=f"cancel_{vid}", use_container_width=True):
+                                st.session_state['renaming_video'] = None
+                                st.rerun()
+                    else:
+                        # --- NORMAL MODE ---
+                        # Use columns to place Title and Pencil side-by-side
+                        c_text, c_edit = st.columns([5, 1])
+                        with c_text:
+                            display_name = vid if len(vid) < 20 else vid[:17] + "..."
+                            st.markdown(f"**{display_name}**")
+                        with c_edit:
+                            if st.button("✏️", key=f"edit_{vid}"):
+                                st.session_state['renaming_video'] = vid
+                                st.rerun()
+
+                    # 3. ACTIONS ROW
+                    c1, c2, c3 = st.columns([1, 2, 1])
                     with c1:
                         if st.button("Open", key=f"open_{vid}", use_container_width=True):
                             st.session_state['selected_video'] = vid
                             st.session_state['current_page'] = "✨ AI Chat"
                             st.rerun()
                     with c2:
-                        if st.button("📝", key=f"sum_{vid}", use_container_width=True):
-                            # This triggers the pop-up dialog
+                        if st.button("Summarize", key=f"sum_{vid}", use_container_width=True):
                             show_summary_popup(vid, username, st.session_state.get('gemini_api_key', ""))
                     with c3:
                         if st.button("🗑️", key=f"del_{vid}", use_container_width=True):

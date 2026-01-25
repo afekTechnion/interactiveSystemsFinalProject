@@ -2,7 +2,14 @@
 
 PinPoint AI is a technical workspace that converts video content into an interactive knowledge base. By combining local transcription, vector embeddings, and Large Language Models (LLMs), the system enables semantic search and automated technical assessment based on video data.
 
+## 🚀 Running the App
+To start the application, run the following command in your terminal:
 
+```bash
+streamlit run app.py
+```
+
+Note that the app might take a couple of moments to load
 
 ## System Architecture
 
