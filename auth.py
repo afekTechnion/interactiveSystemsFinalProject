@@ -27,7 +27,6 @@ def init_user_db():
     conn.close()
 
 
-# initialize the user database on module load
 def validate_password(password):
     """
     Enforces password complexity:

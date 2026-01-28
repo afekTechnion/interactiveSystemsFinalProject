@@ -359,13 +359,13 @@ def render_upload_page(username):
     # fake storage status bar
     col_stat1, col_stat2 = st.columns([3, 1])
     with col_stat1:
-        st.progress(45, text="Cloud Storage Usage (Demo)")
+        st.progress(45, text="Cloud Storage Usage")
     with col_stat2:
-        st.caption("🚀 4.5GB / 10GB Used")
+        st.caption("4.5GB / 10GB Used")
 
     st.divider()
 
-    # upload Area
+    # upload area 
     with st.container(border=True):
         st.markdown("### 📤 Drag & Drop Video")
         uploaded_file = st.file_uploader("", type=["mp4", "mov", "avi"], label_visibility="collapsed")
@@ -388,12 +388,14 @@ def render_upload_page(username):
                 st.rerun()
 
 
+# library page
 def render_library_page(username):
     st.title("🎬 My Studio")
 
     videos = get_videos_list(username)
     _, _, thumbnails_dir = get_user_paths(username)
 
+    # handle empty library
     if not videos:
         st.info("Your library is empty. Go to 'Import' to add videos.")
         return
@@ -404,6 +406,7 @@ def render_library_page(username):
     cols_per_row = 3
     rows = [videos[i:i + cols_per_row] for i in range(0, len(videos), cols_per_row)]
 
+    # display videos in grid
     for row_videos in rows:
         cols = st.columns(cols_per_row)
         for idx, vid in enumerate(row_videos):

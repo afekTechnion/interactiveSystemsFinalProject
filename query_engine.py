@@ -78,9 +78,11 @@ def search_all_collections(query_text, username):
 
     if not initial_candidates: return []
 
+    # rerank candidates
     rerank_pairs = [[query_text, candidate['text']] for candidate in initial_candidates]
     scores = reranker.predict(rerank_pairs)
 
+    # attach scores and reasons
     for i, candidate in enumerate(initial_candidates):
         candidate['score'] = scores[i]
         candidate['reason'] = candidate['text']
@@ -90,6 +92,7 @@ def search_all_collections(query_text, username):
 
 
 def format_local_fallback(query, context_results, error_msg):
+    """Formats a fallback response when cloud AI is unavailable."""
     response = f"**⚠️ Cloud AI Unavailable ({error_msg})**\n\n"
     response += "Using **Local Fallback Mode**. Matches found:\n\n"
     for i, item in enumerate(context_results):
@@ -98,6 +101,7 @@ def format_local_fallback(query, context_results, error_msg):
 
 
 def ask_gemini(query, context_results, api_key):
+    """Sends the user query and context to Gemini API and retrieves the answer."""
     if not api_key: return format_local_fallback(query, context_results, "No API Key")
     try:
         genai.configure(api_key=api_key)
@@ -191,6 +195,7 @@ def generate_quiz_question(video_name, username, api_key):
     client = video_processor.get_db_client(chroma_dir)
     col_name = video_processor.get_safe_collection_name(video_name)
 
+    # fetch full transcript
     try:
         collection = client.get_collection(col_name)  #
         all_data = collection.get()
@@ -235,6 +240,7 @@ def lock_video_chat():
 
 
 def highlight_text(text, query):
+    """Highlights relevant keywords in the text based on the query."""
     if not query: return text[:100] + "..."
 
     # stopwords list
@@ -375,6 +381,7 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
         if results and results['documents']:
             found_any = True
             valid_results = []
+            # process and highlight results
             for i in range(len(results['documents'][0])):
                 doc_text = results['documents'][0][i]
                 start_time = results['metadatas'][0][i]['start_time']

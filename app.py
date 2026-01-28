@@ -98,9 +98,8 @@ def main_app():
     completed_jobs = video_processor.get_and_clear_notifications(username)
     if completed_jobs:
         for video_name in completed_jobs:
-            # Show a nice popup notification
+            # shows popup notification
             st.toast(f"✅ Processing Complete: **{video_name}**", icon="🎉")
-    # =======================================
 
     # open sidebar layout 
     with st.sidebar:
@@ -110,7 +109,6 @@ def main_app():
             <p style="margin:0; font-size: 12px; color: #8B949E;">Pro Video Workspace</p>
         </div>
         """, unsafe_allow_html=True)
-
         st.caption(f"👤 {username}")
 
         # sidebar navigation
@@ -193,7 +191,7 @@ def main_app():
                                         st.session_state['start_time'] = match['start_time']
                                         st.rerun()
 
-            # input area
+            # search videos across library
             user_query = st.chat_input(
                 "Search across your entire library...",
                 on_submit=lock_global_chat,
@@ -201,17 +199,17 @@ def main_app():
             )
 
             if user_query:
-                # append user messag
+                # append user message to history
                 st.session_state['chat_history'].append({"role": "user", "content": user_query})
                 with st.chat_message("user"):
                     st.write(user_query)
                 try:
                     with st.chat_message("assistant", avatar="⚡"):
                         with st.spinner("🧠 Thinking..."):
-                            # 1. Search
+                            # search
                             matches = query_engine.search_all_collections(user_query, username)
 
-                            # 2. Generate Answer
+                            # generate answer
                             if matches:
                                 ai_response = query_engine.ask_gemini(user_query, matches,
                                                                       st.session_state['gemini_api_key'])
@@ -220,7 +218,7 @@ def main_app():
                                     "content": ai_response,
                                     "sources": matches
                                 })
-                                st.write(ai_response)  # Show answer immediately
+                                st.write(ai_response)  # show answer immediately
                             else:
                                 msg = "I couldn't find any relevant information in your library."
                                 st.session_state['chat_history'].append({"role": "assistant", "content": msg})
@@ -228,7 +226,7 @@ def main_app():
                 except Exception as e:
                     st.error(f"An error occurred: {e}")
                 finally:
-                    # THIS ALWAYS RUNS: Unlocks the chat even if there was a crash
+                    # unlocks the chat even if there was a crash
                     st.session_state['processing_global'] = False
                     st.rerun()
         else:
