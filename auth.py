@@ -1,22 +1,22 @@
 import sqlite3
-import bcrypt  # Library for secure hashing
+import bcrypt
 import streamlit as st
 import os
 import re
 
-# Configuration
+# configurations
 BASE_DB_FOLDER = "Database"
 USERS_DB_FILE = os.path.join(BASE_DB_FOLDER, "users.db")
 
-# Ensure DB folder exists
+# ensure DB folder exists
 if not os.path.exists(BASE_DB_FOLDER):
     os.makedirs(BASE_DB_FOLDER)
 
 
+# initialize user database
 def init_user_db():
     conn = sqlite3.connect(USERS_DB_FILE)
     c = conn.cursor()
-    # Note: We store password as BLOB (binary) now for bcrypt compatibility
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -27,8 +27,7 @@ def init_user_db():
     conn.close()
 
 
-# --- SECURITY & VALIDATION ---
-
+# initialize the user database on module load
 def validate_password(password):
     """
     Enforces password complexity:
@@ -44,8 +43,6 @@ def validate_password(password):
 
 def hash_password(password):
     """Securely hashes a password using bcrypt."""
-    # bcrypt requires bytes, so we encode the string
-    # gensalt() adds random data so identical passwords have different hashes
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
 
@@ -57,15 +54,13 @@ def check_password(password, hashed_pw):
         return False
 
 
-# --- DB OPERATIONS ---
-
+# database operations
 def add_user(username, password):
     conn = sqlite3.connect(USERS_DB_FILE)
     c = conn.cursor()
-
-    # Securely hash the password before saving
     hashed_pw = hash_password(password)
 
+    # try to insert the new user
     try:
         c.execute('INSERT INTO users(username, password) VALUES (?,?)', (username, hashed_pw))
         conn.commit()
@@ -85,15 +80,13 @@ def login_user(username, password):
 
     if data:
         stored_hash = data[0]
-        # Verify the password against the stored hash
         if check_password(password, stored_hash):
             return True
 
     return False
 
 
-# --- UI ---
-
+# UI rendering
 def render_login_ui():
     st.markdown("""
         <style>
@@ -112,16 +105,15 @@ def render_login_ui():
         with st.container(border=True):
             tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
 
-            # --- Login Tab ---
+            # login tab
             with tab1:
                 st.write("")
-                # WRAP IN FORM: This enables 'Press Enter' to submit
+                # login form
                 with st.form("login_form"):
                     username = st.text_input("Username")
                     password = st.text_input("Password", type='password')
 
                     st.write("")
-                    # The form_submit_button triggers the form logic
                     submit_login = st.form_submit_button("Log In", type="primary", use_container_width=True)
 
                 if submit_login:
@@ -133,7 +125,7 @@ def render_login_ui():
                     else:
                         st.error("Incorrect Username or Password")
 
-            # --- Sign Up Tab ---
+            # signup tab
             with tab2:
                 st.write("")
                 with st.form("signup_form"):
@@ -144,17 +136,17 @@ def render_login_ui():
                     submit_signup = st.form_submit_button("Create Account", use_container_width=True)
 
                 if submit_signup:
-                    # 1. Check if empty
+                    # check if empty
                     if not new_user or not new_password:
                         st.warning("Please fill in all fields.")
 
-                    # 2. Check Password Restrictions
+                    # check password restrictions
                     else:
                         is_valid, msg = validate_password(new_password)
                         if not is_valid:
                             st.error(msg)
                         else:
-                            # 3. Try to add user
+                            # try to add user
                             if add_user(new_user, new_password):
                                 st.success("Account created! Switch to Login tab.")
                             else:

@@ -5,7 +5,7 @@ import auth
 import video_processor
 import query_engine
 
-
+# page configurations
 st.set_page_config(
     layout="wide",
     page_title="PinPoint AI",
@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 
-
+# custum css styles
 def load_css():
     st.markdown("""
         <style>
@@ -47,14 +47,14 @@ def load_css():
 
 load_css()
 
-# --- Pre-load Models ---
+# pre-load models
 if 'models_loaded' not in st.session_state:
     with st.spinner("🚀 Warming up AI engines..."):
         query_engine.load_reranker()
         st.session_state['models_loaded'] = True
 
 
-# --- Cleanup ---
+# remove any stuck lock files from previous sessions
 def cleanup_stuck_locks():
     if 'cleanup_done' not in st.session_state:
         lock_files = glob.glob(os.path.join(video_processor.PROCESSING_FOLDER, "*.lock"))
@@ -68,6 +68,7 @@ def cleanup_stuck_locks():
 
 cleanup_stuck_locks()
 
+# api management
 if 'gemini_api_key' not in st.session_state:
     if "GEMINI_API_KEY" in st.secrets:
         st.session_state['gemini_api_key'] = st.secrets["GEMINI_API_KEY"]
@@ -76,14 +77,12 @@ if 'gemini_api_key' not in st.session_state:
 
 auth.init_user_db()
 
-# --- Session State ---
+# session state defaults
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'current_page' not in st.session_state: st.session_state['current_page'] = "✨ AI Chat"
 if 'selected_video' not in st.session_state: st.session_state['selected_video'] = None
 if 'chat_history' not in st.session_state: st.session_state['chat_history'] = []
 if 'start_time' not in st.session_state: st.session_state['start_time'] = 0
-
-# --- NEW: UI LOCK STATE ---
 if 'processing_global' not in st.session_state: st.session_state['processing_global'] = False
 
 
@@ -95,8 +94,7 @@ def lock_global_chat():
 def main_app():
     username = st.session_state['username']
 
-    # === NEW: CHECK FOR COMPLETED VIDEOS ===
-    # This checks if any background jobs finished since the last update
+    # checks if any background jobs finished since the last update
     completed_jobs = video_processor.get_and_clear_notifications(username)
     if completed_jobs:
         for video_name in completed_jobs:
@@ -104,8 +102,7 @@ def main_app():
             st.toast(f"✅ Processing Complete: **{video_name}**", icon="🎉")
     # =======================================
 
-    # === FORCE SIDEBAR RENDER ===
-    # We open the sidebar context immediately to ensure Streamlit draws the frame.
+    # open sidebar layout 
     with st.sidebar:
         st.markdown(f"""
         <div style="text-align: center; padding: 10px; background: #21262D; border-radius: 10px; margin-bottom: 20px;">
@@ -116,10 +113,10 @@ def main_app():
 
         st.caption(f"👤 {username}")
 
-        # Navigation
+        # sidebar navigation
         nav_options = ["✨ AI Chat", "🎬 My Studio", "📥 Import"]
 
-        # Ensure valid page selection
+        # ensure valid page selection
         if st.session_state.get('current_page') not in nav_options:
             st.session_state['current_page'] = "✨ AI Chat"
 
@@ -131,7 +128,7 @@ def main_app():
 
         if selected_option != st.session_state['current_page']:
             st.session_state['current_page'] = selected_option
-            # Clear selected video if leaving chat
+            # clear selected video if leaving chat
             if selected_option != "✨ AI Chat":
                 st.session_state['selected_video'] = None
             st.rerun()
@@ -143,13 +140,13 @@ def main_app():
                 api_input = st.text_input("Enter Key", type="password")
                 if api_input: st.session_state['gemini_api_key'] = api_input
 
-            # --- SAFE PROGRESS CHECK ---
+        # show active processing jobs
         try:
             active_jobs = video_processor.get_active_progress(username)
             if active_jobs:
                 st.info(f"⚡ Processing {len(active_jobs)} item(s)")
         except Exception as e:
-            # If this fails, just pass so the sidebar doesn't crash
+            # in case of faliure, we avoid crash
             pass
 
         st.write("")
@@ -157,8 +154,7 @@ def main_app():
             st.session_state['logged_in'] = False
             st.rerun()
 
-    # === MAIN CONTENT ROUTING ===
-    # This runs AFTER the sidebar is drawn
+    # sidebar options logic
     if st.session_state['current_page'] == "📥 Import":
         video_processor.render_upload_page(username)
 
@@ -166,10 +162,6 @@ def main_app():
         video_processor.render_library_page(username)
 
     elif st.session_state['current_page'] == "✨ AI Chat":
-        # ... (Your existing Chat Logic here) ...
-        # Copy the exact Chat Logic from your previous file
-        # I will summarize the structure below to keep it short:
-
         if st.session_state['selected_video'] is None:
             if not st.session_state['chat_history']:
                 st.markdown("""
@@ -183,7 +175,7 @@ def main_app():
                         </div>
                         """, unsafe_allow_html=True)
 
-            # 1. RENDER HISTORY
+            # render history
             for i, msg in enumerate(st.session_state['chat_history']):
                 with st.chat_message(msg['role'], avatar="⚡" if msg['role'] == "assistant" else None):
                     st.write(msg['content'])
@@ -201,7 +193,7 @@ def main_app():
                                         st.session_state['start_time'] = match['start_time']
                                         st.rerun()
 
-            # 2. INPUT AREA (LOCKED WHEN PROCESSING)
+            # input area
             user_query = st.chat_input(
                 "Search across your entire library...",
                 on_submit=lock_global_chat,
@@ -209,12 +201,10 @@ def main_app():
             )
 
             if user_query:
-                # Append user message immediately
+                # append user messag
                 st.session_state['chat_history'].append({"role": "user", "content": user_query})
                 with st.chat_message("user"):
                     st.write(user_query)
-
-                # --- THE FIX: TRY/FINALLY BLOCK ---
                 try:
                     with st.chat_message("assistant", avatar="⚡"):
                         with st.spinner("🧠 Thinking..."):
@@ -235,20 +225,14 @@ def main_app():
                                 msg = "I couldn't find any relevant information in your library."
                                 st.session_state['chat_history'].append({"role": "assistant", "content": msg})
                                 st.write(msg)
-
                 except Exception as e:
                     st.error(f"An error occurred: {e}")
-
                 finally:
                     # THIS ALWAYS RUNS: Unlocks the chat even if there was a crash
                     st.session_state['processing_global'] = False
                     st.rerun()
-
-
-        # --- SCENARIO B: Watching Video ---
-
         else:
-            # 1. New Header Layout with Resizer
+            # new header layout with resizer
             col_back, col_title, col_resize = st.columns([1, 5, 3])
 
             with col_back:
@@ -261,7 +245,7 @@ def main_app():
                 st.subheader(f"🎬 {st.session_state['selected_video']}")
 
             with col_resize:
-                # This slider acts as your "movable divider"
+                # slider for resizing
                 split_ratio = st.slider(
 
                     "Adjust Layout",
@@ -279,8 +263,7 @@ def main_app():
 
             video_path = os.path.join(videos_dir, selected_vid)
 
-            # 2. Dynamic Column Sizing based on Slider
-            # split_ratio is the Video width %, the rest is Chat width %
+            # dynamic column sizing based on slider
             col_player, col_chat = st.columns([split_ratio, 100 - split_ratio])
 
             with col_player:

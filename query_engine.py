@@ -5,12 +5,13 @@ import re
 from sentence_transformers import CrossEncoder
 import google.generativeai as genai
 
-# --- CONFIGURATION ---
+# configurations
 GEMINI_MODEL_NAME = "gemini-2.5-flash"
 INITIAL_TOP_K = 10
 FINAL_TOP_K = 3
 
 
+# load reranker model with caching
 @st.cache_resource(show_spinner=False)
 def load_reranker():
     if torch.cuda.is_available():
@@ -23,6 +24,7 @@ def load_reranker():
 
 
 def expand_context(collection, center_id, window=1):
+    """Fetches surrounding segments to provide expanded context."""
     try:
         base_name, index_str = center_id.rsplit('_', 1)
         current_idx = int(index_str)
@@ -38,6 +40,7 @@ def expand_context(collection, center_id, window=1):
 
 
 def search_single_video(collection_name, query_text, username, n_results=5):
+    """Searches a single video's collection for relevant segments."""
     _, chroma_dir, _ = video_processor.get_user_paths(username)
     client = video_processor.get_db_client(chroma_dir)
     try:
@@ -48,6 +51,7 @@ def search_single_video(collection_name, query_text, username, n_results=5):
 
 
 def search_all_collections(query_text, username):
+    """Searches all video collections for the user and reranks results."""
     videos_dir, chroma_dir, _ = video_processor.get_user_paths(username)
     client = video_processor.get_db_client(chroma_path=chroma_dir)
     videos = video_processor.get_videos_list(username)
@@ -98,7 +102,7 @@ def ask_gemini(query, context_results, api_key):
     try:
         genai.configure(api_key=api_key)
 
-        # Build a cleaner context string
+        # build a cleaner context string
         context_text = ""
         for item in context_results:
             context_text += f"--- Snippet from {item.get('video_name', 'video')} ---\n{item['text']}\n\n"
@@ -137,7 +141,7 @@ def generate_video_summary(video_name, username, api_key):
     if not api_key:
         return "Please provide a Gemini API Key in the sidebar."
 
-    # Get DB paths
+    # get DB paths
     _, chroma_dir, _ = video_processor.get_user_paths(username)
     client = video_processor.get_db_client(chroma_dir)
     col_name = video_processor.get_safe_collection_name(video_name)
@@ -146,7 +150,7 @@ def generate_video_summary(video_name, username, api_key):
         collection = client.get_collection(col_name)
         all_data = collection.get()  # Fetch all segments
 
-        # Reconstruct transcript chronologically based on the ID suffix (_0, _1, etc)
+        # reconstruct transcript chronologically based on the ID suffix
         sorted_indices = sorted(range(len(all_data['ids'])),
                                 key=lambda k: int(all_data['ids'][k].rsplit('_', 1)[1]))
         full_transcript = " ".join([all_data['documents'][i] for i in sorted_indices])
@@ -179,7 +183,7 @@ def generate_video_summary(video_name, username, api_key):
 
 
 def generate_quiz_question(video_name, username, api_key):
-    """שולף את הטרנסקריפט ומייצר שאלה טכנית משמעותית עם פתרון."""
+    """Generates a high-quality multiple-choice question from the video's transcript."""
     if not api_key:
         return "Please provide an API Key."
 
@@ -225,7 +229,7 @@ def generate_quiz_question(video_name, username, api_key):
         return f"Error: {str(e)}"
 
 
-# --- LOCK CALLBACK ---
+# locking mechanism for video chat input
 def lock_video_chat():
     st.session_state['processing_video'] = True
 
@@ -233,8 +237,7 @@ def lock_video_chat():
 def highlight_text(text, query):
     if not query: return text[:100] + "..."
 
-    # 1. STOP WORDS LIST
-    # Common words to ignore so we don't highlight "what", "is", "the", etc.
+    # stopwords list
     STOP_WORDS = {
         "what", "where", "when", "how", "who", "why", "which",
         "the", "is", "are", "was", "were", "be", "been", "being",
@@ -248,26 +251,21 @@ def highlight_text(text, query):
 
     raw_words = query.lower().split()
 
-    # Filter: Keep words that are NOT stop words AND are > 2 chars
+    # keep words that are NOT stop words AND are > 2 chars
     keywords = [w for w in raw_words if w not in STOP_WORDS and len(w) > 2]
 
-    # Fallback: If filtering removed everything (e.g. query was just "what is"),
-    # keep the original words to avoid breaking the logic.
+    # if filtering removed everything, we keep the original words to avoid breaking the logic
     if not keywords:
         keywords = [w for w in raw_words if len(w) > 2]
 
-    # 2. PREPARE REGEX PATTERN (Smart Matching)
-    # We create a pattern that matches the keyword + any suffix (like 's', 'ing', 'ed')
-    # \b ensures it starts at a word boundary. \w* allows the suffix.
+    # we create a pattern that matches the keyword + any suffix (like 's', 'ing', 'ed')
     if keywords:
-        # Example pattern: \b(elephant\w*|tiger\w*)
         pattern_str = r'\b(?:' + '|'.join([re.escape(w) + r'\w*' for w in keywords]) + r')'
         regex = re.compile(pattern_str, re.IGNORECASE)
     else:
         regex = None
 
-    # 3. SMART TRUNCATION
-    # Find the first occurrence of ANY of our smart keywords
+    # find the first occurrence of ANY of our smart keywords
     first_match_index = -1
     if regex:
         match = regex.search(text)
@@ -281,7 +279,7 @@ def highlight_text(text, query):
     else:
         snippet = text[:80] + "..."
 
-    # 4. APPLY FADED HIGHLIGHT
+    # apply highlight to all occurrences in the snippet
     if regex:
         highlighted = regex.sub(
             lambda
@@ -294,52 +292,51 @@ def highlight_text(text, query):
     return highlighted
 
 
-# --- MAIN UI FUNCTION ---
+# UI for the video chat
 def render_search_ui(selected_video_name, video_path, video_player_placeholder, username, api_key):
     st.markdown("### 💬 Chat with Video")
 
-    # 1. Initialize State
+    # initialize state
     if 'video_chat_history' not in st.session_state:
         st.session_state['video_chat_history'] = []
 
-    # Check for video switch
+    # check for video switch
     if 'last_video_name' not in st.session_state:
         st.session_state['last_video_name'] = selected_video_name
     elif st.session_state['last_video_name'] != selected_video_name:
         st.session_state['video_chat_history'] = []
         st.session_state['last_video_name'] = selected_video_name
 
-    # Lock state for this specific component
+    # lock state for this specific component
     if 'processing_video' not in st.session_state:
         st.session_state['processing_video'] = False
 
     if st.button("🧠 Challenge me with a question!", use_container_width=True):
         with st.spinner("Analyzing video..."):
             quiz_content = generate_quiz_question(selected_video_name, username, api_key)
-            # אנחנו מוסיפים את השאלה כהודעה מה-Assistant עם סימון מיוחד
+            # append quiz message with a special flag
             st.session_state['video_chat_history'].append({
                 "role": "assistant",
                 "content": quiz_content,
-                "is_quiz": True  # סימון כדי שנדע להציג את הפתרון מוסתר
+                "is_quiz": True
             })
             st.rerun()
 
-    # 2. Scrollable Container
+    # scrollable container
     chat_container = st.container(height=500)
     with chat_container:
         for i, msg in enumerate(st.session_state['video_chat_history']):
-            # Assistant uses a custom robot icon string or default avatar
             avatar_style = "assistant" if msg['role'] == "assistant" else "user"
             with st.chat_message(msg['role'], avatar=avatar_style):
 
-                # Specific rendering logic for quiz messages
+                # rendering logic for quiz messages
                 if msg.get('is_quiz') and "Solution:" in msg['content']:
                     q_part, s_part = msg['content'].split("Solution:")
                     st.markdown(f"**Challenge Question:**\n\n{q_part}")
                     with st.expander("Check the Answer"):
                         st.success(s_part.strip())
                 else:
-                    # Standard text message rendering
+                    # text message rendering
                     st.write(msg['content'])
 
                 if msg.get('sources'):
@@ -348,7 +345,7 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
 
                     for idx, res in enumerate(msg['sources']):
                         with st.container(border=True):
-                            # Time calculation for playback control
+                            # time calculation for playback control
                             minutes = int(res['start_time'] // 60)
                             seconds = int(res['start_time'] % 60)
                             time_str = f"{minutes:02d}:{seconds:02d}"
@@ -357,12 +354,12 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
                                 st.session_state['start_time'] = res['start_time']
                                 st.rerun()
 
-                            # Render text with grey subtext styling
+                            # render text with grey subtext styling
                             st.markdown(
                                 f"<div style='margin-top: 10px; color: #CCCCCC;'>... {res['text']} ...</div>",
                                 unsafe_allow_html=True)
 
-    # 3. Locked Chat Input
+    # locked chat input
     query = st.chat_input(
         "Ask about this video...",
         on_submit=lock_video_chat,
@@ -381,10 +378,7 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
             for i in range(len(results['documents'][0])):
                 doc_text = results['documents'][0][i]
                 start_time = results['metadatas'][0][i]['start_time']
-
-                # This function now returns a SHORT snippet with FADED highlights
                 styled_text = highlight_text(doc_text, query)
-
                 valid_results.append({'text': styled_text, 'start_time': start_time})
 
             if found_any:
@@ -402,6 +396,5 @@ def render_search_ui(selected_video_name, video_path, video_player_placeholder, 
                 "sources": []
             })
 
-        # UNLOCK AND RERUN
         st.session_state['processing_video'] = False
         st.rerun()

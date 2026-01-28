@@ -8,9 +8,9 @@ import chromadb
 from chromadb.utils import embedding_functions
 import torch
 import base64
-import cv2  # Needed for thumbnails
+import cv2
 
-# --- Configuration ---
+# configurations
 BASE_DB_FOLDER = "Database"
 PROCESSING_FOLDER = os.path.join(BASE_DB_FOLDER, "processing")
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -19,7 +19,7 @@ if not os.path.exists(PROCESSING_FOLDER):
     os.makedirs(PROCESSING_FOLDER)
 
 
-# --- Helper: User Paths ---
+# user paths
 def get_user_paths(username):
     user_folder = os.path.join(BASE_DB_FOLDER, "users", username)
     videos_dir = os.path.join(user_folder, "videos")
@@ -38,13 +38,12 @@ def get_safe_collection_name(video_name):
     return f"vid_{safe_hash}"
 
 
-# --- Thumbnail Generator ---
+# thumbnail generator
 def generate_thumbnail(video_path, thumbnail_path):
     try:
         cap = cv2.VideoCapture(video_path)
         success, frame = cap.read()
         if success:
-            # Resize to save space
             frame = cv2.resize(frame, (640, 360))
             cv2.imwrite(thumbnail_path, frame)
         cap.release()
@@ -52,8 +51,8 @@ def generate_thumbnail(video_path, thumbnail_path):
         print(f"Thumbnail error: {e}")
 
 
-# --- Status Management ---
 def update_progress(username, video_name, progress_percent, stage_name):
+    """Updates a JSON file with the current progress of video processing."""
     safe_name = get_safe_collection_name(video_name)
     status_file = os.path.join(PROCESSING_FOLDER, f"{username}_{safe_name}.json")
     status_data = {"video": video_name, "progress": progress_percent, "stage": stage_name}
@@ -64,7 +63,7 @@ def update_progress(username, video_name, progress_percent, stage_name):
 def create_completion_notification(username, video_name):
     """Creates a temporary file to signal the frontend that a job is done."""
     safe_name = get_safe_collection_name(video_name)
-    # Create a file named "done_username_videoname.flag"
+    # create a file named "done_username_videoname.flag"
     note_file = os.path.join(PROCESSING_FOLDER, f"done_{username}_{safe_name}.flag")
     with open(note_file, 'w') as f:
         f.write(video_name)
@@ -73,14 +72,14 @@ def create_completion_notification(username, video_name):
 def get_and_clear_notifications(username):
     """Checks for completion flags, returns the video names, and deletes the flags."""
     completed_videos = []
-    # Search for files starting with "done_username_"
+    # search for files starting with "done_username_"
     for f in os.listdir(PROCESSING_FOLDER):
         if f.startswith(f"done_{username}_") and f.endswith(".flag"):
             path = os.path.join(PROCESSING_FOLDER, f)
             try:
                 with open(path, 'r') as file:
                     completed_videos.append(file.read())
-                os.remove(path)  # Delete immediately so we only notify once
+                os.remove(path)  # delete immediately so we only notify once
             except:
                 pass
     return completed_videos
@@ -105,7 +104,6 @@ def get_active_progress(username):
     return active_jobs
 
 
-# --- Backend Logic ---
 @st.cache_resource
 def load_whisper():
     return whisper.load_model("small", device=device)
@@ -145,7 +143,7 @@ def rename_video(username, old_name, new_name_base):
     """
     videos_dir, chroma_dir, thumbnails_dir = get_user_paths(username)
 
-    # 1. Determine extensions and full paths
+    # determine extensions and full paths
     _, ext = os.path.splitext(old_name)
     new_full_name = f"{new_name_base}{ext}"
 
@@ -156,42 +154,33 @@ def rename_video(username, old_name, new_name_base):
         return False, "A video with this name already exists."
 
     try:
-        # 2. Rename Video File
+        # rename video file
         os.rename(old_vid_path, new_vid_path)
 
-        # 3. Rename Thumbnail
+        # rename thumbnail
         old_thumb = os.path.join(thumbnails_dir, f"{old_name}.jpg")
         new_thumb = os.path.join(thumbnails_dir, f"{new_full_name}.jpg")
         if os.path.exists(old_thumb):
             os.rename(old_thumb, new_thumb)
 
-        # 4. Migrate ChromaDB Collection
-        # We must change the collection name because it is a hash of the filename
+        # rename ChromaDB collection
         client = get_db_client(chroma_dir)
         old_col_name = get_safe_collection_name(old_name)
         new_col_name = get_safe_collection_name(new_full_name)
 
         try:
             collection = client.get_collection(old_col_name)
-            # Rename the collection itself
+            # rename the collection itself
             collection.modify(name=new_col_name)
 
-            # Optional: Update metadata inside the collection (Good practice)
-            # This ensures internal metadata matches the new filename
+            # update metadata for all segments
             all_ids = collection.get()['ids']
             if all_ids:
-                # Update 'video_name' in metadata for all segments
-                # Note: We keep other metadata fields intact if possible,
-                # but simplistic update is safer here to avoid complex logic.
-                # For this specific app, we only really rely on 'start_time' and 'video_name'
-                # We will skip metadata update to prevent timeouts on large videos,
-                # as the app logic relies on the filename (which we just changed).
                 pass
 
         except Exception as e:
             print(f"Chroma Rename Warning: {e}")
-            # If collection doesn't exist (e.g. video wasn't processed), we just skip it
-            pass
+            pass  # if collection doesn't exist, skip 
 
         return True, new_full_name
 
@@ -203,7 +192,7 @@ def process_video_in_background(file_path, video_name, chroma_path, username):
     _, _, thumbnails_dir = get_user_paths(username)
     thumb_path = os.path.join(thumbnails_dir, f"{video_name}.jpg")
 
-    # Generate thumbnail first
+    # generate thumbnail first
     generate_thumbnail(file_path, thumb_path)
 
     update_progress(username, video_name, 5, "Initializing AI Models...")
@@ -273,7 +262,7 @@ def show_summary_popup(video_name, username, api_key):
     st.markdown(summary_text)
     st.divider()
 
-    # Only TXT download option remains
+    # TXT download option
     st.download_button(
         label="📄 Download TXT",
         data=summary_text,
@@ -283,18 +272,16 @@ def show_summary_popup(video_name, username, api_key):
     )
 
 
-# --- UI Functions ---
+# UI 
 def get_videos_list(username):
     videos_dir, _, _ = get_user_paths(username)
     if not os.path.exists(videos_dir): return []
     return [f for f in os.listdir(videos_dir) if f.endswith(('.mp4', '.mov', '.avi'))]
 
 
-# === 🎨 NEW DESIGN: Upload Page with Progress ===
 def render_upload_page(username):
     st.title("📥 Import Content")
 
-    # --- PROGESS SECTION START ---
     active_jobs = get_active_progress(username)
     if active_jobs:
         st.info("🔄 Processing in background...")
@@ -302,14 +289,12 @@ def render_upload_page(username):
             st.write(f"**{job['video']}**: {job['stage']}")
             st.progress(job['progress'])
 
-        # This causes the page to refresh, animating the bar
         time.sleep(1)
         st.rerun()
-    # --- PROGRESS SECTION END ---
 
     videos_dir, chroma_dir, _ = get_user_paths(username)
 
-    # 1. Fake Storage Status Bar (Aesthetic)
+    # fake storage status bar
     col_stat1, col_stat2 = st.columns([3, 1])
     with col_stat1:
         st.progress(45, text="Cloud Storage Usage (Demo)")
@@ -318,7 +303,7 @@ def render_upload_page(username):
 
     st.divider()
 
-    # 2. Upload Area
+    # upload area
     with st.container(border=True):
         st.markdown("### 📤 Drag & Drop Video")
         uploaded_file = st.file_uploader("", type=["mp4", "mov", "avi"], label_visibility="collapsed")
@@ -341,7 +326,6 @@ def render_upload_page(username):
                 st.rerun()
 
 
-# === 🎨 NEW DESIGN: Library Page (Grid Layout) ===
 def render_library_page(username):
     st.title("🎬 My Studio")
 
@@ -352,11 +336,11 @@ def render_library_page(username):
         st.info("Your library is empty. Go to 'Import' to add videos.")
         return
 
-    # Initialize edit state if not exists
+    # initialize edit state if not exists
     if 'renaming_video' not in st.session_state:
         st.session_state['renaming_video'] = None
 
-    # --- GRID LAYOUT LOGIC ---
+    # display videos in a grid
     cols_per_row = 3
     rows = [videos[i:i + cols_per_row] for i in range(0, len(videos), cols_per_row)]
 
@@ -364,9 +348,7 @@ def render_library_page(username):
         cols = st.columns(cols_per_row)
         for idx, vid in enumerate(row_videos):
             with cols[idx]:
-                # Card Container
                 with st.container(border=True):
-                    # 1. THUMBNAIL (Fixed Height)
                     thumb_path = os.path.join(thumbnails_dir, f"{vid}.jpg")
                     style_settings = "width: 100%; height: 180px; object-fit: cover; border-radius: 4px; margin-bottom: 10px;"
 
@@ -385,9 +367,7 @@ def render_library_page(username):
                         st.markdown(f'<div style="{style_settings} background-color: #262730;">No Preview</div>',
                                     unsafe_allow_html=True)
 
-                    # 2. TITLE SECTION (With Rename Logic)
                     if st.session_state['renaming_video'] == vid:
-                        # --- EDIT MODE ---
                         base_name = os.path.splitext(vid)[0]
                         new_name_input = st.text_input("New Name", value=base_name, key=f"input_{vid}",
                                                        label_visibility="collapsed")
@@ -404,7 +384,6 @@ def render_library_page(username):
                                     else:
                                         st.error(msg)
                                 else:
-                                    # No change
                                     st.session_state['renaming_video'] = None
                                     st.rerun()
                         with c_cancel:
@@ -412,8 +391,6 @@ def render_library_page(username):
                                 st.session_state['renaming_video'] = None
                                 st.rerun()
                     else:
-                        # --- NORMAL MODE ---
-                        # Use columns to place Title and Pencil side-by-side
                         c_text, c_edit = st.columns([5, 1])
                         with c_text:
                             display_name = vid if len(vid) < 20 else vid[:17] + "..."
@@ -423,7 +400,6 @@ def render_library_page(username):
                                 st.session_state['renaming_video'] = vid
                                 st.rerun()
 
-                    # 3. ACTIONS ROW
                     c1, c2, c3 = st.columns([1, 2, 1])
                     with c1:
                         if st.button("Open", key=f"open_{vid}", use_container_width=True):
