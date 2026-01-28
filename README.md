@@ -2,7 +2,22 @@
 
 PinPoint AI is a technical workspace that converts video content into an interactive knowledge base. By combining local transcription, vector embeddings, and Large Language Models (LLMs), the system enables semantic search and automated technical assessment based on video data.
 
-## 🚀 Running the App
+## Main Functionalities
+
+### **Universal Knowledge Retrieval**
+* **Global AI Chat:** Perform semantic searches across your *entire* video library simultaneously. Ask "Where did we discuss thermodynamics?" and the system will scan all indexed videos to find the answer.
+* **Ranked Source Identification:** The AI provides a ranked list of the most relevant video segments across your collection.
+* **Deep-Link Navigation:** Every search result includes a "Jump to" button that instantly opens the correct video and seeks to the exact timestamp where the concept is discussed.
+
+### **Active Workspace**
+* **Context-Aware Chat:** A focused chat interface locked to a specific video's transcript ensures answers are grounded solely in the immediate lecture content.
+* **Interactive Source Cards:** AI responses are backed by clickable citation cards that control the video player, allowing for instant verification of facts.
+
+### **AI-Powered Learning Tools**
+* **Automated Summarization:** Generate structured, chronological summaries of any lecture with a single click. Summaries can be exported as text files for offline revision.
+* **Practice Option:** Transform passive viewing into active recall. The system can generate technical multiple-choice questions based on the video context. Solutions are hidden behind a collapsible UI element to ensure you test your knowledge before seeing the answer.
+
+## Running the App
 
 ### 1. API Configuration
 To enable the AI features (Chat & Summarization), you need a Google Gemini API Key.
@@ -21,7 +36,7 @@ Once configured, run the following command in your terminal:
 streamlit run app.py
 ```
 
-Note that the app might take a couple of moments to load
+Note: the app might take a couple of moments to load
 
 ## System Architecture
 
