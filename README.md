@@ -3,7 +3,19 @@
 PinPoint AI is a technical workspace that converts video content into an interactive knowledge base. By combining local transcription, vector embeddings, and Large Language Models (LLMs), the system enables semantic search and automated technical assessment based on video data.
 
 ## 🚀 Running the App
-To start the application, run the following command in your terminal:
+
+### 1. API Configuration
+To enable the AI features (Chat & Summarization), you need a Google Gemini API Key.
+
+1.  **Get a Key:** Visit [Google AI Studio](https://aistudio.google.com/app/apikey) and click **Create API key**.
+2.  **Configure the App:**
+    : Inside the `.streamlit` folder in the project root, enter a file named `secrets.toml` and add your key:
+        ```
+        GEMINI_API_KEY = "your_actual_api_key_here"
+        ```
+
+### 2. Start the Server
+Once configured, run the following command in your terminal:
 
 ```bash
 streamlit run app.py

@@ -1,24 +1,6 @@
-# Local environment and libraries
+# Ignore the virtual environment folder entirely
+.streamlit/
 .venv/
-__pycache__/
-*.pyc
 .idea/
-.vscode/
-
-# Streamlit secrets (Contains your API Keys)
-.streamlit/secrets.toml
-
-# Database and AI Data
-# We ignore processing flags and user data to protect privacy and save space
-Database/processing/
-Database/users/
-Database/users.db
-
-# Large Model Weights and Downloads
-# Whisper and Sentence-Transformers cache models here by default
-cat_cache/
-.cache/
-
-# OS specific files
-.DS_Store
-Thumbs.db
+__pycache__/
+Database/
